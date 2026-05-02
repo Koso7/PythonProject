@@ -1,11 +1,3 @@
-#halloooo
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings, OllamaLLM
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
-import textwrap
-
 # 1. Verbindung zur Datenbank und den Modellen
 embeddings = OllamaEmbeddings(model="nomic-embed-text")
 vector_db = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)

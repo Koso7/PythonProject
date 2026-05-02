@@ -7,193 +7,180 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 import datetime
-from dateutil.relativedelta import relativedelta
 
-# --- 1. SEITEN-SETUP & KONFIGURATION ---
-st.set_page_config(page_title="Pflege-Assistent", page_icon="🏥", layout="centered")
+# --- 1. GLOBALE KONFIGURATION ---
+st.set_page_config(page_title="Pflege-Assistent Pro", page_icon="⚖️", layout="wide")
 API_URL = "http://127.0.0.1:8000"
 
-# Initialisierung der Zustände
+# Initialisierung des Session-Speichers
 if "token" not in st.session_state: st.session_state.token = None
+if "username" not in st.session_state: st.session_state.username = ""
 if "verify_mode" not in st.session_state: st.session_state.verify_mode = False
-if "temp_username" not in st.session_state: st.session_state.temp_username = ""
+if "temp_user" not in st.session_state: st.session_state.temp_user = ""
+if "messages" not in st.session_state: st.session_state.messages = []
+if "extracted_text" not in st.session_state: st.session_state.extracted_text = ""
 
 
-# --- 2. KI LADE-FUNKTION (wird erst benötigt, wenn eingeloggt) ---
+# --- 2. KI-ENGINE (Caching für Geschwindigkeit) ---
 @st.cache_resource
 def get_rag_chain():
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
     vector_db = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
     retriever = vector_db.as_retriever(search_kwargs={"k": 4})
     llm = OllamaLLM(model="mistral")
-    return retriever, llm
 
-
-def analyze_documents(bescheid_text, user_query):
-    retriever, llm = get_rag_chain()
     template = """Du bist ein Experte für Pflegegrad-Widersprüche.
-    QUELLE 1 (Nutzer-Dokumente): {bescheid_text}
-    QUELLE 2 (Richtlinien): {context}
+    NUTZER-DOKUMENTE: {bescheid_text}
+    GESETZES-KONTEXT: {context}
     FRAGE: {question}
     ANTWORT:"""
     prompt = PromptTemplate.from_template(template)
 
     def format_docs(docs): return "\n\n".join(doc.page_content for doc in docs)
 
-    chain = ({"context": retriever | format_docs, "question": RunnablePassthrough(),
-              "bescheid_text": lambda x: bescheid_text} | prompt | llm | StrOutputParser())
-    return chain.invoke(user_query)
+    return ({"context": retriever | format_docs, "question": RunnablePassthrough(),
+             "bescheid_text": lambda x: x["bescheid_text"]}
+            | prompt | llm | StrOutputParser())
 
 
 # =====================================================================
-# ANSICHT 1: DAS LOGIN-PORTAL (Nur sichtbar, wenn NICHT eingeloggt)
+# PHASE 1: LOGIN & REGISTRIERUNG (Vorgeschaltet)
 # =====================================================================
 if st.session_state.token is None:
-    st.title("🏥 Willkommen beim Pflege-Assistenten")
-    st.markdown("### Ihr digitaler Begleiter für Pflegegrad-Widersprüche")
-    st.write("Um Ihre sensiblen Gesundheitsdaten zu schützen, melden Sie sich bitte an oder registrieren Sie sich.")
-    st.divider()
+    st.title("🛡️ Pflegehilfe Online - Portal")
+    col_a, col_b = st.columns(2)
 
-    tab_login, tab_reg = st.tabs(["🔑 Anmelden", "📝 Neu Registrieren"])
-
-    with tab_login:
+    with col_a:
         st.subheader("Anmeldung")
-        st.write("Bitte geben Sie Ihre E-Mail-Adresse (oder Benutzernamen) und Ihr Passwort ein.")
-        log_user = st.text_input("E-Mail oder Benutzername", key="log_user")
-        log_pass = st.text_input("Passwort", type="password", key="log_pass")
+        with st.form("login_form"):
+            u = st.text_input("Benutzername")
+            p = st.text_input("Passwort", type="password")
+            if st.form_submit_button("Einloggen", use_container_width=True):
+                try:
+                    res = requests.post(f"{API_URL}/login", data={"username": u, "password": p})
+                    if res.status_code == 200:
+                        st.session_state.token = res.json().get("access_token")
+                        st.session_state.username = u
+                        st.rerun()
+                    else:
+                        detail = res.json().get("detail", "Login fehlgeschlagen.")
+                        st.error(detail)
+                except Exception as e:
+                    st.error(f"Verbindung zum Backend fehlgeschlagen. Läuft uvicorn? (Fehler: {e})")
 
-        if st.button("Jetzt Anmelden", use_container_width=True, type="primary"):
-            try:
-                response = requests.post(f"{API_URL}/login", data={"username": log_user, "password": log_pass})
-                if response.status_code == 200:
-                    st.session_state.token = response.json().get("access_token")
-                    st.rerun()  # Schaltet die Seite auf die App um!
-                else:
-                    st.error(f"Fehler: {response.json().get('detail')}")
-            except requests.exceptions.ConnectionError:
-                st.error("Der Server ist momentan nicht erreichbar.")
-
-    with tab_reg:
+    with col_b:
+        st.subheader("Registrierung")
         if not st.session_state.verify_mode:
-            st.subheader("Neues Konto erstellen")
-            reg_user = st.text_input("Wählen Sie einen Benutzernamen")
-            reg_mail = st.text_input("Ihre E-Mail-Adresse")
-            reg_pass = st.text_input("Wählen Sie ein sicheres Passwort", type="password")
-
-            if st.button("Konto erstellen & Code anfordern", use_container_width=True):
-                if not reg_user or not reg_mail or not reg_pass:
-                    st.warning("Bitte füllen Sie alle Felder aus.")
-                else:
+            with st.form("reg_form"):
+                ru = st.text_input("Benutzername wählen")
+                re = st.text_input("E-Mail")
+                rp = st.text_input("Passwort", type="password")
+                if st.form_submit_button("Konto erstellen"):
                     try:
-                        res = requests.post(f"{API_URL}/register",
-                                            json={"username": reg_user, "email": reg_mail, "password": reg_pass})
+                        res = requests.post(f"{API_URL}/register", json={"username": ru, "email": re, "password": rp})
                         if res.status_code == 200:
-                            st.session_state.temp_username = reg_user
+                            st.session_state.temp_user = ru
                             st.session_state.verify_mode = True
                             st.rerun()
                         else:
-                            st.error(res.json().get("detail"))
-                    except requests.exceptions.ConnectionError:
-                        st.error("Der Server ist momentan nicht erreichbar.")
-
+                            # Robuste Fehlerbehandlung gegen JSONDecodeError
+                            try:
+                                detail = res.json().get("detail", "Unbekannter Fehler")
+                                st.error(f"Server-Info: {detail}")
+                            except:
+                                st.error(f"Backend-Fehler (Status: {res.status_code}). Bitte uvicorn-Terminal prüfen!")
+                    except Exception as e:
+                        st.error(f"Anfrage fehlgeschlagen: {e}")
         else:
-            # Ansicht für die Code-Eingabe
-            st.subheader("📧 E-Mail bestätigen")
-            st.success("Wir haben Ihnen einen 6-stelligen Code gesendet. (Pst: Schau ins PyCharm Backend-Terminal!)")
-            code_input = st.text_input("Bitte geben Sie hier Ihren Code ein:")
-
-            if st.button("Code bestätigen", use_container_width=True, type="primary"):
-                res = requests.post(f"{API_URL}/verify",
-                                    json={"username": st.session_state.temp_username, "code": code_input})
-                if res.status_code == 200:
-                    st.success("Erfolgreich bestätigt! Sie können sich nun im Tab 'Anmelden' einloggen.")
-                    st.session_state.verify_mode = False
-                    st.session_state.temp_username = ""
-                else:
-                    st.error("Der Code ist leider falsch.")
-
+            st.warning(f"Bitte Code für {st.session_state.temp_user} eingeben:")
+            v_code = st.text_input("6-stelliger Code (siehe Backend-Terminal)")
+            if st.button("Code verifizieren"):
+                try:
+                    res = requests.post(f"{API_URL}/verify",
+                                        json={"username": st.session_state.temp_user, "code": v_code})
+                    if res.status_code == 200:
+                        st.success("Erfolgreich! Bitte jetzt links einloggen.")
+                        st.session_state.verify_mode = False
+                    else:
+                        st.error(res.json().get("detail", "Falscher Code."))
+                except:
+                    st.error("Verbindung zum Server unterbrochen.")
 
 # =====================================================================
-# ANSICHT 2: DIE EIGENTLICHE APP (Nur sichtbar, wenn eingeloggt)
+# PHASE 2: DIE HAUPT-APP (Nach Login)
 # =====================================================================
 else:
-    # Damit die App breiter ist als das Login-Fenster
-    st.markdown("<style> .block-container { max-width: 1200px; } </style>", unsafe_allow_html=True)
-
+    # Sidebar für Status und Logout
     with st.sidebar:
-        st.success("✅ Sicher eingeloggt.")
-        if st.button("🚪 Abmelden"):
+        st.title("User-Panel")
+        st.write(f"Eingeloggt als: **{st.session_state.username}**")
+        if st.button("🚪 Abmelden", use_container_width=True):
             st.session_state.token = None
+            st.session_state.username = ""
             st.rerun()
-
         st.divider()
-        st.header("📂 1. Dokumente hochladen")
-        st.write("Laden Sie hier Briefe von Ärzten oder der Pflegekasse hoch.")
-        einwilligung = st.checkbox("Ich erlaube die temporäre Auswertung dieser Dokumente.", value=False)
+        st.info("Ihre Daten werden DSGVO-konform verarbeitet.")
 
-        bescheid_inhalt = ""
-        if einwilligung:
-            uploaded_files = st.file_uploader("PDF-Dateien hier ablegen", type=["pdf"], accept_multiple_files=True)
-            if uploaded_files:
-                for file in uploaded_files:
-                    bescheid_inhalt += f"\n\n=== {file.name} ===\n\n"
-                    reader = PdfReader(file)
-                    for p in reader.pages: bescheid_inhalt += (p.extract_text() or "")
-                st.success(f"{len(uploaded_files)} Dokument(e) bereit.")
+    # Die Tab-Navigation
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "💬 KI-Chatbot",
+        "📄 Dokumenten-Management",
+        "⏳ Fristen & Recht",
+        "⚙️ Profil-Einstellungen"
+    ])
 
-    st.title("🏥 Ihr Pflege-Assistent")
-    st.write("Wie kann ich Ihnen heute bei Ihrem Pflegegrad helfen?")
-
-    tab1, tab2, tab3, tab4 = st.tabs(["💬 Fragen stellen", "📝 Brief erstellen", "⏱️ Fristen", "👤 Profil"])
-
+    # --- TAB 1: CHATBOT ---
     with tab1:
-        if "messages" not in st.session_state:
-            st.session_state.messages = [
-                {"role": "assistant", "content": "Guten Tag! Haben Sie Fragen zu Ihren Unterlagen?"}]
+        st.subheader("KI-Analyse & Widerspruchs-Hilfe")
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
-        if user_input := st.chat_input("Ihre Frage..."):
-            st.session_state.messages.append({"role": "user", "content": user_input})
+
+        if prompt := st.chat_input("Fragen Sie etwas zu Ihrem Bescheid..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
-                st.markdown(user_input)
+                st.markdown(prompt)
+
             with st.chat_message("assistant"):
-                if 'bescheid_inhalt' in locals() and bescheid_inhalt:
-                    with st.spinner("Ich lese die Unterlagen..."):
-                        response = analyze_documents(bescheid_inhalt, user_input)
+                txt = st.session_state.extracted_text
+                if txt:
+                    chain = get_rag_chain()
+                    with st.spinner("Analysiere Daten..."):
+                        response = chain.invoke({"question": prompt, "bescheid_text": txt})
+                    st.markdown(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                 else:
-                    response = "Bitte laden Sie links zuerst Ihre Dokumente hoch."
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                    st.error("Bitte laden Sie im Tab 'Dokumenten-Management' zuerst Ihre PDFs hoch!")
 
+    # --- TAB 2: DOKUMENTE ---
     with tab2:
-        st.header("Widerspruch verfassen")
-        if st.button("Brief jetzt entwerfen", type="primary"):
-            if 'bescheid_inhalt' in locals() and bescheid_inhalt:
-                with st.spinner("Ich formuliere den Brief für Sie..."):
-                    draft = analyze_documents(bescheid_inhalt,
-                                              "Schreibe einen formellen Widerspruchsbrief. Analysiere Dokumente auf Differenzen und begründe mit NBA-Richtlinien.")
-                    st.text_area("Ihr fertiger Brief:", value=draft, height=400)
-            else:
-                st.warning("Bitte laden Sie zuerst Dokumente hoch.")
+        st.subheader("Upload von Bescheiden (PDF)")
+        files = st.file_uploader("PDF-Dateien auswählen", type="pdf", accept_multiple_files=True)
+        if files:
+            combined_text = ""
+            for f in files:
+                reader = PdfReader(f)
+                for page in reader.pages: combined_text += (page.extract_text() or "")
+            st.session_state.extracted_text = combined_text
+            st.success(f"{len(files)} Dokument(e) für die KI bereitgestellt.")
 
+    # --- TAB 3: FRISTEN ---
     with tab3:
-        st.header("Fristen-Kalender")
-        bescheid_datum = st.date_input("An welchem Tag lag der Bescheid in Ihrem Briefkasten?", format="DD.MM.YYYY")
-        if bescheid_datum:
-            frist_ende = bescheid_datum + relativedelta(months=1)
-            if frist_ende.weekday() >= 5: frist_ende += datetime.timedelta(days=(7 - frist_ende.weekday()))
-            st.error(f"🚨 **Wichtig: Ihr Brief muss bis zum {frist_ende.strftime('%d.%m.%Y')} bei der Kasse sein!**")
+        st.subheader("Widerspruchs-Fristenrechner")
+        datum = st.date_input("Eingangsdatum des Bescheids", value=datetime.date.today())
+        frist = datum + datetime.timedelta(days=30)
+        st.metric("Ihre Deadline", frist.strftime("%d.%m.%Y"))
 
+        if st.button("Fristverlängerung anfordern"):
+            headers = {"Authorization": f"Bearer {st.session_state.token}"}
+            res = requests.post(f"{API_URL}/users/extend", headers=headers)
+            st.success("Anfrage zur Verlängerung wurde übermittelt.")
+
+    # --- TAB 4: EINSTELLUNGEN ---
     with tab4:
-        st.header("Ihre Daten")
-        auth_headers = {"Authorization": f"Bearer {st.session_state.token}"}
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("⏳ Account-Löschung um 1 Woche verschieben"):
-                requests.post(f"{API_URL}/users/extend", headers=auth_headers)
-                st.success("Frist erfolgreich verlängert.")
-        with col2:
-            if st.button("🗑️ Account jetzt löschen"):
-                requests.delete(f"{API_URL}/users/me", headers=auth_headers)
-                st.session_state.token = None
-                st.rerun()
+        st.subheader("Account-Verwaltung")
+        if st.button("🚨 Konto unwiderruflich löschen"):
+            headers = {"Authorization": f"Bearer {st.session_state.token}"}
+            requests.delete(f"{API_URL}/users/me", headers=headers)
+            st.session_state.token = None
+            st.warning("Account gelöscht.")
+            st.rerun()
