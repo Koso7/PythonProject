@@ -3,13 +3,12 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-import bcrypt  # Wir nutzen bcrypt jetzt direkt
+import bcrypt
 from datetime import datetime, timezone, timedelta
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr
 import random
 
-# --- SETUP ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -17,7 +16,6 @@ SECRET_KEY = "dein_geheimnis_fuer_den_pflegeraht"
 ALGORITHM = "HS256"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
-# --- DB ---
 SQLALCHEMY_DATABASE_URL = "sqlite:///./pflege_sicher.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -37,9 +35,7 @@ class UserDB(Base):
 Base.metadata.create_all(bind=engine)
 
 
-# --- HELPER (DIREKT MIT BCRYPT) ---
 def get_password_hash(password: str):
-    # Bcrypt braucht Bytes, daher .encode()
     pwd_bytes = password.encode('utf-8')
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(pwd_bytes, salt).decode('utf-8')
@@ -64,7 +60,6 @@ def get_db():
         db.close()
 
 
-# --- ENDPUNKTE ---
 class UserCreate(BaseModel):
     username: str
     email: EmailStr
