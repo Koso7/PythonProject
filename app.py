@@ -3,61 +3,51 @@ import requests
 import datetime
 from pypdf import PdfReader
 
-# LangChain & Ollama Imports
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# --- LANGCHAIN & OLLAMA IMPORTS ---
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
-# --- KONFIGURATION ---
+# --- 1. KONFIGURATION ---
 st.set_page_config(page_title="Pflege-Assistent Pro", page_icon="⚖️", layout="wide")
 API_URL = "http://127.0.0.1:8000"
 
-# Initialisierung des Session-Speichers
+# Session State initialisieren
 if "token" not in st.session_state: st.session_state.token = None
 if "verify_user" not in st.session_state: st.session_state.verify_user = None
 if "messages" not in st.session_state: st.session_state.messages = []
-if "vector_store" not in st.session_state: st.session_state.vector_store = None
+if "extracted_text" not in st.session_state: st.session_state.extracted_text = ""
 
 
-# --- KI-LOGIK (Striktes RAG mit Mistral) ---
-def process_documents_to_chroma(files):
-    """Liest PDFs, teilt sie in Chunks und speichert sie in Chroma."""
-    text = ""
-    for file in files:
-        reader = PdfReader(file)
-        for page in reader.pages:
-            text += (page.extract_text() or "") + "\n"
-
-    # Text in sinnvolle Abschnitte teilen
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = text_splitter.split_text(text)
-
-    # Embeddings (Vektorisierung) via Ollama
+# --- 2. KI-LOGIK (Fachwissen + User-Bescheid) ---
+@st.cache_resource
+def get_expert_database():
+    """Lädt das feste Fachwissen (z.B. GKV-Richtlinien) aus dem daten-Ordner."""
     embeddings = OllamaEmbeddings(model="nomic-embed-text")
-
-    # Temporäre In-Memory Chroma-Datenbank für diese Sitzung erstellen
-    vectorstore = Chroma.from_texts(texts=chunks, embedding=embeddings)
-    return vectorstore
+    # Greift auf den Ordner zu, den ingest.py erstellt hat
+    return Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
 
 
-def get_rag_chain(vectorstore):
-    """Baut die Pipeline auf, die sicherstellt, dass NUR die Dokumente genutzt werden."""
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+def get_rag_chain(expert_db, user_bescheid_text):
+    """Kombiniert das Fachwissen aus der DB mit dem Bescheid des Nutzers."""
+    retriever = expert_db.as_retriever(search_kwargs={"k": 4})
     llm = OllamaLLM(model="mistral")
 
-    # Der strikte System-Prompt
-    template = """Du bist ein KI-Assistent für Pflegegrad-Widersprüche.
-    WICHTIGE REGEL: Beantworte die Frage AUSSCHLIESSLICH basierend auf dem folgenden Kontext (den Dokumenten des Nutzers).
-    Wenn die Antwort NICHT im Kontext enthalten ist, antworte zwingend mit: "Dazu habe ich keine Informationen in den hochgeladenen Dokumenten gefunden."
-    Erfinde keine Daten. Dies ist keine Rechtsberatung.
+    template = """Du bist ein professioneller KI-Assistent für Pflegegrad-Widersprüche.
+    WICHTIGE REGELN: 
+    1. Beantworte die Frage basierend auf dem FACHWISSEN und dem PERSÖNLICHEN BESCHEID.
+    2. Wenn die Antwort in diesen Texten nicht zu finden ist, antworte zwingend: "Dazu habe ich keine Informationen in den Dokumenten gefunden."
+    3. Erfinde niemals eigene Fakten oder Fristen. Dies ist keine Rechtsberatung.
 
-    KONTEXT:
+    FACHWISSEN (Gesetze & Richtlinien):
     {context}
 
-    FRAGE:
+    PERSÖNLICHER BESCHEID (Vom Nutzer hochgeladen):
+    {bescheid}
+
+    FRAGE DES NUTZERS:
     {question}
 
     ANTWORT:"""
@@ -67,8 +57,13 @@ def get_rag_chain(vectorstore):
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
+    # Baut die Pipeline zusammen
     chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            {
+                "context": retriever | format_docs,
+                "question": RunnablePassthrough(),
+                "bescheid": lambda x: user_bescheid_text
+            }
             | prompt
             | llm
             | StrOutputParser()
@@ -94,7 +89,7 @@ if st.session_state.token is None:
                     st.session_state.token = res.json()["access_token"]
                     st.rerun()
                 else:
-                    st.error("Login fehlgeschlagen. Daten prüfen.")
+                    st.error("Login fehlgeschlagen. Bitte Daten prüfen.")
 
     with col2:
         if not st.session_state.verify_user:
@@ -109,10 +104,9 @@ if st.session_state.token is None:
                         st.session_state.verify_user = ru
                         st.rerun()
                     else:
-                        detail = res.json().get("detail", "Fehler")
-                        st.error(f"Fehler: {detail}")
+                        st.error("Fehler bei der Registrierung (Name/Mail evtl. schon vergeben).")
         else:
-            st.info(f"Bitte Code für {st.session_state.verify_user} eingeben (siehe Backend-Terminal)")
+            st.info(f"Code für {st.session_state.verify_user} im Backend-Terminal ablesen!")
             code = st.text_input("6-stelliger Code")
             if st.button("Verifizieren", use_container_width=True):
                 res = requests.post(f"{API_URL}/verify", json={"username": st.session_state.verify_user, "code": code})
@@ -129,13 +123,13 @@ else:
     # --- DAUERHAFTER HAFTUNGSAUSSCHLUSS ---
     with st.sidebar:
         st.warning(
-            "⚠️ **WICHTIGER HINWEIS**\n\nDies ist eine KI-gestützte Analyse-Software und stellt **keine rechtliche oder medizinische Beratung** dar.\n\nAlle generierten Texte (wie z.B. Widerspruchsschreiben) müssen von Ihnen auf Richtigkeit geprüft werden. Bei rechtlichen Fragen konsultieren Sie bitte einen Fachanwalt oder Sozialverband.")
+            "⚠️ **WICHTIGER HINWEIS**\n\nDies ist eine KI-gestützte Analyse-Software und stellt **keine rechtliche oder medizinische Beratung** dar.\n\nAlle generierten Texte müssen von Ihnen auf Richtigkeit geprüft werden. Bei rechtlichen Fragen konsultieren Sie bitte einen Fachanwalt oder Sozialverband.")
 
         st.divider()
         if st.button("🚪 Ausloggen", use_container_width=True):
             st.session_state.token = None
             st.session_state.messages = []
-            st.session_state.vector_store = None
+            st.session_state.extracted_text = ""
             st.rerun()
 
     # --- NAVIGATION ---
@@ -143,48 +137,59 @@ else:
 
     # --- TAB 1: DOKUMENTE HOCHLADEN ---
     with tab1:
-        st.subheader("Ihre Bescheide & Gutachten")
+        st.subheader("Ihren Bescheid hochladen")
         st.info("Sie können mehrere PDF-Dokumente gleichzeitig auswählen.")
 
-        # accept_multiple_files=True erlaubt mehrere Dateien
         uploaded_files = st.file_uploader("PDFs hochladen", type="pdf", accept_multiple_files=True)
 
         if uploaded_files:
-            if st.button("🚀 Dokumente analysieren & für KI aufbereiten", type="primary"):
-                with st.spinner("Lese Dokumente und füttere die Datenbank..."):
+            if st.button("🚀 Dokumente für die KI einlesen", type="primary"):
+                with st.spinner("Lese Ihre PDFs..."):
                     try:
-                        # Dokumente in ChromaDB laden
-                        vs = process_documents_to_chroma(uploaded_files)
-                        st.session_state.vector_store = vs
+                        text = ""
+                        for file in uploaded_files:
+                            reader = PdfReader(file)
+                            for page in reader.pages:
+                                text += (page.extract_text() or "") + "\n"
+
+                        # Wir speichern den Text einfach im Session State
+                        st.session_state.extracted_text = text
                         st.success(
-                            f"✅ {len(uploaded_files)} Dokument(e) erfolgreich verarbeitet. Sie können jetzt im Chat-Tab Fragen dazu stellen.")
+                            f"✅ {len(uploaded_files)} Dokument(e) erfolgreich gelesen. Sie können jetzt in den Chat wechseln!")
                     except Exception as e:
                         st.error(f"Fehler beim Verarbeiten: {e}")
 
     # --- TAB 2: KI CHAT ---
     with tab2:
-        st.subheader("KI-Widerspruchs-Assistent")
+        st.subheader("Widerspruchs-Assistent")
 
-        if st.session_state.vector_store is None:
-            st.warning("Bitte laden Sie zuerst im Tab 'Dokumente' Ihre PDFs hoch und klicken Sie auf Analysieren.")
-        else:
-            # Chat Historie anzeigen
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+        # Chat Historie anzeigen
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
 
-            # Neues Input-Feld
-            if prompt := st.chat_input("Fragen Sie etwas zu Ihren hochgeladenen Bescheiden..."):
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
+        # Neues Input-Feld
+        if prompt := st.chat_input("Fragen Sie etwas (z.B. 'Warum wurde Pflegegrad 2 abgelehnt?')..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
 
-                with st.chat_message("assistant"):
-                    with st.spinner("Suche in Ihren Dokumenten..."):
-                        chain = get_rag_chain(st.session_state.vector_store)
+            with st.chat_message("assistant"):
+                with st.spinner("Analysiere Gesetze und Ihren Bescheid..."):
+                    try:
+                        # 1. Holt die feste Datenbank
+                        expert_db = get_expert_database()
+                        # 2. Holt den hochgeladenen Text (oder einen Hinweis, falls leer)
+                        bescheid_text = st.session_state.extracted_text if st.session_state.extracted_text else "Der Nutzer hat noch keinen eigenen Bescheid hochgeladen."
+
+                        # 3. Startet die KI mit beidem
+                        chain = get_rag_chain(expert_db, bescheid_text)
                         response = chain.invoke(prompt)
+
                         st.markdown(response)
                         st.session_state.messages.append({"role": "assistant", "content": response})
+                    except Exception as e:
+                        st.error(f"KI-Fehler: Haben Sie 'ingest.py' ausgeführt? (Details: {e})")
 
     # --- TAB 3: FRISTEN ---
     with tab3:
