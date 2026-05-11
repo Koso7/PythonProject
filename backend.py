@@ -23,7 +23,6 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 ACCOUNT_LIFETIME_DAYS = int(os.getenv("ACCOUNT_LIFETIME_DAYS", "28"))
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./pflege_sicher.db")
-
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:8501")
 
 # ------------------------------------------------------------
@@ -31,7 +30,7 @@ FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:8501")
 # ------------------------------------------------------------
 app = FastAPI(
     title="Pflege-Assistent API",
-    description="Backend für Login, Registrierung und Authentifizierung.",
+    description="Backend für Registrierung, Login und Authentifizierung.",
     version="1.0.0",
 )
 
@@ -79,17 +78,6 @@ Base.metadata.create_all(bind=engine)
 
 
 # ------------------------------------------------------------
-# DB-SESSION
-# ------------------------------------------------------------
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# ------------------------------------------------------------
 # SCHEMAS
 # ------------------------------------------------------------
 class UserCreate(BaseModel):
@@ -122,12 +110,15 @@ def now_utc() -> datetime:
     return datetime.utcnow()
 
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 def purge_expired_users(db: Session):
-    """
-    Löscht abgelaufene Nutzerkonten.
-    Da persönliche Dokumente nicht dauerhaft gespeichert werden,
-    betrifft dies nur Login-/Account-Daten.
-    """
     expired_users = db.query(UserDB).filter(UserDB.expires_at < now_utc()).all()
 
     for user in expired_users:
@@ -246,8 +237,6 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
 
-    # Für das Studienprojekt/Demo:
-    # Produktiv müsste dieser Code per E-Mail versendet werden.
     print("\n" + "=" * 60)
     print(f"VERIFIZIERUNGSCODE FÜR {user.username}: {verification_code}")
     print("=" * 60 + "\n")

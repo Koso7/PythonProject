@@ -1,8 +1,11 @@
 import datetime
+import os
+import uuid
 from typing import List, Tuple
 
 import requests
 import streamlit as st
+from dotenv import load_dotenv
 from pypdf import PdfReader
 
 from langchain_chroma import Chroma
@@ -10,19 +13,26 @@ from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # ------------------------------------------------------------
 # KONFIGURATION
 # ------------------------------------------------------------
+load_dotenv()
+
 st.set_page_config(
     page_title="Pflege-Assistent Pro",
     page_icon="⚖️",
     layout="wide",
 )
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3")
+LLM_MODEL = os.getenv("LLM_MODEL", "mistral-nemo")
+
 MAX_FILE_SIZE_MB = 10
-MAX_TOTAL_TEXT_CHARS = 120_000
+MAX_TOTAL_TEXT_CHARS = 160_000
 
 # ------------------------------------------------------------
 # SESSION STATE
@@ -39,8 +49,14 @@ if "messages" not in st.session_state:
 if "extracted_text" not in st.session_state:
     st.session_state.extracted_text = ""
 
-if "last_sources" not in st.session_state:
-    st.session_state.last_sources = []
+if "user_documents" not in st.session_state:
+    st.session_state.user_documents = []
+
+if "last_user_sources" not in st.session_state:
+    st.session_state.last_user_sources = []
+
+if "last_expert_sources" not in st.session_state:
+    st.session_state.last_expert_sources = []
 
 
 # ------------------------------------------------------------
@@ -65,137 +81,79 @@ def logout():
     st.session_state.token = None
     st.session_state.messages = []
     st.session_state.extracted_text = ""
-    st.session_state.last_sources = []
+    st.session_state.user_documents = []
+    st.session_state.last_user_sources = []
+    st.session_state.last_expert_sources = []
     st.rerun()
 
 
 # ------------------------------------------------------------
-# KI-/RAG-LOGIK
+# TEXT-HILFSFUNKTIONEN
+# ------------------------------------------------------------
+def clean_text(text: str) -> str:
+    text = text.replace("\x00", " ")
+    text = text.replace("\t", " ")
+    text = text.replace("  ", " ")
+
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            lines.append(line)
+
+    return "\n".join(lines)
+
+
+def remove_duplicate_docs(docs: List[Document]) -> List[Document]:
+    unique_docs = []
+    seen = set()
+
+    for doc in docs:
+        source = doc.metadata.get("source", "")
+        page = doc.metadata.get("page", "")
+        content_preview = clean_text(doc.page_content)[:350]
+
+        key = (source, page, content_preview)
+
+        if key not in seen:
+            seen.add(key)
+            unique_docs.append(doc)
+
+    return unique_docs
+
+
+# ------------------------------------------------------------
+# KI-/RAG-RESSOURCEN
 # ------------------------------------------------------------
 @st.cache_resource
+def get_embeddings():
+    return OllamaEmbeddings(model=EMBEDDING_MODEL)
+
+
+@st.cache_resource
 def get_expert_database():
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
+    embeddings = get_embeddings()
     return Chroma(
-        persist_directory="./chroma_db",
+        persist_directory=CHROMA_DIR,
         embedding_function=embeddings,
+        collection_name="pflege_fachwissen",
     )
 
 
 @st.cache_resource
 def get_llm():
     return OllamaLLM(
-        model="mistral-nemo",
+        model=LLM_MODEL,
         temperature=0.0,
     )
 
 
-def get_relevant_docs(expert_db, question: str, k: int = 12) -> List[Document]:
-    retriever = expert_db.as_retriever(search_kwargs={"k": k})
-    return retriever.invoke(question)
-
-
-def format_docs_for_prompt(docs: List[Document]) -> str:
-    context_parts = []
-
-    for index, doc in enumerate(docs, start=1):
-        source = doc.metadata.get("source", "Unbekannte Quelle")
-        page = doc.metadata.get("page", None)
-
-        if page is not None:
-            source_label = f"Quelle {index}: {source}, Seite {page + 1}"
-        else:
-            source_label = f"Quelle {index}: {source}"
-
-        context_parts.append(
-            f"{source_label}\n"
-            f"{doc.page_content}"
-        )
-
-    return "\n\n---\n\n".join(context_parts)
-
-
-def build_source_list(docs: List[Document]) -> List[dict]:
-    sources = []
-
-    for index, doc in enumerate(docs, start=1):
-        source = doc.metadata.get("source", "Unbekannte Quelle")
-        page = doc.metadata.get("page", None)
-
-        preview = doc.page_content.replace("\n", " ").strip()
-        if len(preview) > 400:
-            preview = preview[:400] + "..."
-
-        sources.append(
-            {
-                "nr": index,
-                "source": source,
-                "page": page + 1 if page is not None else None,
-                "preview": preview,
-            }
-        )
-
-    return sources
-
-
-def generate_rag_answer(
-    expert_db,
-    user_question: str,
-    user_document_text: str,
-) -> Tuple[str, List[dict]]:
-    docs = get_relevant_docs(expert_db, user_question, k=12)
-    context = format_docs_for_prompt(docs)
-    sources = build_source_list(docs)
-
-    llm = get_llm()
-
-    template = """
-Du bist ein KI-gestützter Assistenzdienst zur strukturierten Vorbereitung eines Pflegegrad-Widerspruchs.
-
-Wichtig:
-- Du ersetzt keine Rechtsberatung.
-- Du erstellst nur einen überprüfbaren Entwurf.
-- Du darfst keine medizinischen oder rechtlichen Tatsachen erfinden.
-- Wenn Informationen fehlen, benenne diese Lücken ausdrücklich.
-- Schreibe vollständig auf Deutsch.
-- Verwende eine sachliche, behördentaugliche Sprache.
-
-Nutze vorrangig die NUTZER-DOKUMENTE.
-Nutze das FACHWISSEN nur ergänzend zur Begründung.
-Beziehe dich im Text auf die Quellen aus dem Fachwissen, wenn sie wirklich passen.
-
-FACHWISSEN:
-{context}
-
-NUTZER-DOKUMENTE:
-{bescheid}
-
-AUFTRAG DES NUTZERS:
-{question}
-
-Erstelle nun einen strukturierten Entwurf.
-Falls der Nutzer keinen Widerspruchsbrief verlangt, beantworte seine Frage passend zum Pflegegrad-Thema.
-"""
-
-    prompt = PromptTemplate.from_template(template)
-
-    chain = prompt | llm | StrOutputParser()
-
-    answer = chain.invoke(
-        {
-            "context": context,
-            "bescheid": user_document_text,
-            "question": user_question,
-        }
-    )
-
-    return answer, sources
-
-
 # ------------------------------------------------------------
-# PDF-VERARBEITUNG
+# PDF-VERARBEITUNG NUTZERDOKUMENTE
 # ------------------------------------------------------------
-def extract_text_from_pdfs(uploaded_files) -> str:
-    text = ""
+def extract_user_documents_from_pdfs(uploaded_files) -> Tuple[str, List[Document]]:
+    full_text = ""
+    page_documents = []
 
     for file in uploaded_files:
         file_size_mb = file.size / (1024 * 1024)
@@ -207,15 +165,314 @@ def extract_text_from_pdfs(uploaded_files) -> str:
 
         reader = PdfReader(file)
 
-        for page in reader.pages:
-            text += (page.extract_text() or "") + "\n"
+        for page_index, page in enumerate(reader.pages, start=1):
+            page_text = page.extract_text() or ""
+            page_text = clean_text(page_text)
 
-        if len(text) > MAX_TOTAL_TEXT_CHARS:
-            text = text[:MAX_TOTAL_TEXT_CHARS]
-            text += "\n\n[Hinweis: Der Text wurde gekürzt, weil sehr viele Daten hochgeladen wurden.]"
-            break
+            if len(page_text.strip()) < 30:
+                continue
 
-    return text
+            full_text += f"\n\n--- Dokument: {file.name}, Seite {page_index} ---\n"
+            full_text += page_text
+
+            page_documents.append(
+                Document(
+                    page_content=page_text,
+                    metadata={
+                        "source": file.name,
+                        "page": page_index,
+                        "document_type": "nutzerdokument",
+                    },
+                )
+            )
+
+            if len(full_text) > MAX_TOTAL_TEXT_CHARS:
+                full_text = full_text[:MAX_TOTAL_TEXT_CHARS]
+                full_text += "\n\n[Hinweis: Der Text wurde gekürzt, weil sehr viele Daten hochgeladen wurden.]"
+                break
+
+    chunks = split_user_documents(page_documents)
+
+    return full_text, chunks
+
+
+def split_user_documents(page_documents: List[Document]) -> List[Document]:
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=750,
+        chunk_overlap=160,
+        separators=[
+            "\n\n",
+            "\n",
+            ". ",
+            "; ",
+            ", ",
+            " ",
+            "",
+        ],
+    )
+
+    chunks = splitter.split_documents(page_documents)
+
+    cleaned_chunks = []
+    seen = set()
+
+    for index, chunk in enumerate(chunks):
+        content = clean_text(chunk.page_content)
+
+        if len(content) < 80:
+            continue
+
+        source = chunk.metadata.get("source", "")
+        page = chunk.metadata.get("page", "")
+        key = (source, page, content[:300])
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        chunk.page_content = content
+        chunk.metadata["chunk_id"] = index
+        chunk.metadata["chunk_size"] = len(content)
+
+        cleaned_chunks.append(chunk)
+
+    return cleaned_chunks
+
+
+# ------------------------------------------------------------
+# RETRIEVAL NUTZERDOKUMENTE
+# ------------------------------------------------------------
+def search_user_documents(
+    user_documents: List[Document],
+    user_question: str,
+    k: int = 8,
+) -> List[Document]:
+    if not user_documents:
+        return []
+
+    embeddings = get_embeddings()
+
+    collection_name = f"user_docs_{uuid.uuid4().hex}"
+
+    temp_db = Chroma.from_documents(
+        documents=user_documents,
+        embedding=embeddings,
+        collection_name=collection_name,
+    )
+
+    retriever = temp_db.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": k,
+            "fetch_k": min(30, max(k, len(user_documents))),
+            "lambda_mult": 0.45,
+        },
+    )
+
+    docs = retriever.invoke(user_question)
+
+    return remove_duplicate_docs(docs)
+
+
+# ------------------------------------------------------------
+# RETRIEVAL FACHWISSEN
+# ------------------------------------------------------------
+def build_expert_search_query(
+    user_question: str,
+    relevant_user_docs: List[Document],
+) -> str:
+    user_doc_excerpt = "\n\n".join(
+        doc.page_content[:900] for doc in relevant_user_docs[:6]
+    )
+
+    search_query = f"""
+Pflegegrad Widerspruch Pflegekasse Medizinischer Dienst MD Gutachten Begutachtung
+Neues Begutachtungsassessment NBA Pflegebedürftigkeitsrichtlinien Begutachtungsrichtlinien
+Module Mobilität kognitive kommunikative Fähigkeiten Verhaltensweisen psychische Problemlagen
+Selbstversorgung krankheitsbedingte Anforderungen Gestaltung des Alltagslebens soziale Kontakte
+Pflegegrad 2 Pflegegrad 3 Höherstufung Widerspruchsbegründung Unstimmigkeiten Gutachten
+
+Nutzerfrage:
+{user_question}
+
+Relevante Auszüge aus Nutzerdokumenten:
+{user_doc_excerpt}
+"""
+
+    return search_query
+
+
+def search_expert_documents(
+    expert_db,
+    search_query: str,
+    k: int = 10,
+) -> List[Document]:
+    retriever = expert_db.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": k,
+            "fetch_k": 45,
+            "lambda_mult": 0.35,
+        },
+    )
+
+    docs = retriever.invoke(search_query)
+
+    return remove_duplicate_docs(docs)
+
+
+# ------------------------------------------------------------
+# QUELLENFORMATIERUNG
+# ------------------------------------------------------------
+def format_docs_for_prompt(title: str, docs: List[Document]) -> str:
+    if not docs:
+        return f"{title}: Keine relevanten Textstellen gefunden."
+
+    parts = [title]
+
+    for index, doc in enumerate(docs, start=1):
+        source = doc.metadata.get("source", "Unbekannte Quelle")
+        page = doc.metadata.get("page", None)
+
+        if page:
+            source_label = f"{title} {index}: {source}, Seite {page}"
+        else:
+            source_label = f"{title} {index}: {source}"
+
+        parts.append(
+            f"{source_label}\n"
+            f"{doc.page_content}"
+        )
+
+    return "\n\n---\n\n".join(parts)
+
+
+def build_source_list(docs: List[Document]) -> List[dict]:
+    sources = []
+    seen = set()
+
+    for doc in docs:
+        source = doc.metadata.get("source", "Unbekannte Quelle")
+        page = doc.metadata.get("page", None)
+
+        preview = clean_text(doc.page_content)
+        if len(preview) > 550:
+            preview = preview[:550] + "..."
+
+        key = (source, page, preview[:250])
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        sources.append(
+            {
+                "nr": len(sources) + 1,
+                "source": source,
+                "page": page,
+                "preview": preview,
+            }
+        )
+
+    return sources
+
+
+# ------------------------------------------------------------
+# ANTWORTGENERIERUNG
+# ------------------------------------------------------------
+def generate_rag_answer(
+    expert_db,
+    user_question: str,
+    user_documents: List[Document],
+) -> Tuple[str, List[dict], List[dict]]:
+    relevant_user_docs = search_user_documents(
+        user_documents=user_documents,
+        user_question=user_question,
+        k=8,
+    )
+
+    expert_search_query = build_expert_search_query(
+        user_question=user_question,
+        relevant_user_docs=relevant_user_docs,
+    )
+
+    relevant_expert_docs = search_expert_documents(
+        expert_db=expert_db,
+        search_query=expert_search_query,
+        k=10,
+    )
+
+    user_context = format_docs_for_prompt(
+        title="RELEVANTE NUTZERDOKUMENTSTELLEN",
+        docs=relevant_user_docs,
+    )
+
+    expert_context = format_docs_for_prompt(
+        title="RELEVANTES FACHWISSEN",
+        docs=relevant_expert_docs,
+    )
+
+    llm = get_llm()
+
+    template = """
+Du bist ein KI-gestützter Assistenzdienst zur strukturierten Vorbereitung eines Pflegegrad-Widerspruchs.
+
+Wichtige Grenzen:
+- Du ersetzt keine Rechtsberatung.
+- Du ersetzt keine medizinische Begutachtung.
+- Du darfst keine Tatsachen erfinden.
+- Du darfst nur mit den bereitgestellten Nutzerdokumentstellen und dem bereitgestellten Fachwissen arbeiten.
+- Wenn eine Information nicht in den bereitgestellten Texten steht, schreibe ausdrücklich, dass diese Information nicht vorliegt.
+- Schreibe vollständig auf Deutsch.
+- Verwende eine sachliche, behördentaugliche Sprache.
+
+AUFGABE:
+Beantworte exakt den Auftrag des Nutzers.
+
+Wenn der Nutzer eine Prüfung oder Analyse verlangt, erstelle zuerst eine strukturierte Analyse und keinen vollständigen Widerspruchsbrief.
+
+Struktur bei Dokumentenprüfung:
+1. Kurzfazit
+2. Welche relevanten Probleme stehen in den Nutzerdokumenten?
+3. Was scheint im Gutachten/Bescheid berücksichtigt worden zu sein?
+4. Welche möglichen Unstimmigkeiten oder Lücken gibt es?
+5. Welche Pflegegrad-Module sind betroffen?
+6. Welche Argumentationsgrundlagen für einen Widerspruch ergeben sich?
+7. Welche Informationen fehlen oder sollten noch geprüft werden?
+8. Optional: Formulierungsvorschläge für einzelne Widerspruchsargumente
+
+Nur wenn der Nutzer ausdrücklich einen vollständigen Widerspruchsbrief verlangt, erstelle einen vollständigen Brief.
+
+RELEVANTE NUTZERDOKUMENTSTELLEN:
+{user_context}
+
+RELEVANTES FACHWISSEN:
+{expert_context}
+
+NUTZERFRAGE:
+{question}
+
+ANTWORT:
+"""
+
+    prompt = PromptTemplate.from_template(template)
+
+    chain = prompt | llm | StrOutputParser()
+
+    answer = chain.invoke(
+        {
+            "user_context": user_context,
+            "expert_context": expert_context,
+            "question": user_question,
+        }
+    )
+
+    user_sources = build_source_list(relevant_user_docs)
+    expert_sources = build_source_list(relevant_expert_docs)
+
+    return answer, user_sources, expert_sources
 
 
 # ------------------------------------------------------------
@@ -375,9 +632,12 @@ else:
         st.divider()
 
         st.caption(
-            "Datenschutz: Hochgeladene persönliche Dokumente werden in diesem Prototyp "
-            "nur temporär während der Sitzung verarbeitet und nicht dauerhaft in der Wissensdatenbank gespeichert."
+            "Datenschutz: Hochgeladene persönliche Dokumente werden nur temporär "
+            "während der Sitzung verarbeitet und nicht dauerhaft in der Wissensdatenbank gespeichert."
         )
+
+        st.caption(f"LLM: {LLM_MODEL}")
+        st.caption(f"Embeddings: {EMBEDDING_MODEL}")
 
         if st.button("🚪 Ausloggen", use_container_width=True):
             logout()
@@ -396,7 +656,7 @@ else:
     with tab1:
         st.subheader("Persönliche Dokumente hochladen")
         st.info(
-            "Laden Sie hier Bescheide, Gutachten oder Pflegetagebücher als PDF hoch. "
+            "Laden Sie hier Bescheide, Gutachten, ärztliche Unterlagen oder Pflegetagebücher als PDF hoch. "
             "Die Inhalte werden nur für die aktuelle Sitzung verwendet."
         )
 
@@ -414,33 +674,42 @@ else:
                 st.caption(f"- {file.name} ({file_size_mb:.2f} MB)")
 
             if st.button("🚀 Dokumente einlesen", type="primary"):
-                with st.spinner("Dokumente werden gelesen..."):
+                with st.spinner("Dokumente werden gelesen und in temporäre Chunks zerlegt..."):
                     try:
-                        extracted_text = extract_text_from_pdfs(uploaded_files)
+                        extracted_text, user_documents = extract_user_documents_from_pdfs(uploaded_files)
+
                         st.session_state.extracted_text = extracted_text
+                        st.session_state.user_documents = user_documents
+                        st.session_state.messages = []
+                        st.session_state.last_user_sources = []
+                        st.session_state.last_expert_sources = []
 
                         st.success(
-                            "Dokumente wurden erfolgreich eingelesen. "
-                            "Sie können nun im KI-Assistenten Fragen dazu stellen."
+                            f"Dokumente wurden erfolgreich eingelesen. "
+                            f"Es wurden **{len(user_documents)} temporäre Textabschnitte** erstellt."
                         )
 
                         with st.expander("Eingelesenen Text anzeigen"):
                             st.text_area(
                                 "Extrahierter Text",
-                                value=st.session_state.extracted_text[:10_000],
-                                height=300,
+                                value=st.session_state.extracted_text[:12_000],
+                                height=350,
                             )
 
                     except Exception as e:
                         st.error(f"Fehler beim Verarbeiten der PDFs: {e}")
 
-        if st.session_state.extracted_text:
-            st.success("Es sind aktuell persönliche Dokumente in dieser Sitzung geladen.")
+        if st.session_state.user_documents:
+            st.success(
+                f"Es sind aktuell **{len(st.session_state.user_documents)} temporäre Nutzerdokument-Chunks** geladen."
+            )
 
             if st.button("Geladene Dokumentdaten aus Sitzung löschen"):
                 st.session_state.extracted_text = ""
+                st.session_state.user_documents = []
                 st.session_state.messages = []
-                st.session_state.last_sources = []
+                st.session_state.last_user_sources = []
+                st.session_state.last_expert_sources = []
                 st.rerun()
 
     # --------------------------------------------------------
@@ -449,11 +718,10 @@ else:
     with tab2:
         st.subheader("Pflegegrad-Widerspruchsassistent")
 
-        if not st.session_state.extracted_text:
+        if not st.session_state.user_documents:
             st.info(
                 "Sie haben noch keine persönlichen Dokumente hochgeladen. "
-                "Der Assistent kann trotzdem allgemeine Fragen beantworten, "
-                "aber keine individuelle Dokumentenanalyse durchführen."
+                "Der Assistent kann allgemeine Fragen beantworten, aber keine individuelle Dokumentenprüfung durchführen."
             )
 
         for msg in st.session_state.messages:
@@ -461,7 +729,7 @@ else:
                 st.markdown(msg["content"])
 
         user_prompt = st.chat_input(
-            "Beispiel: Analysiere den Bescheid und erstelle einen Entwurf für einen Widerspruch."
+            "Beispiel: Prüfe Bescheid, Pflegetagebuch und ärztliche Unterlagen auf mögliche Unstimmigkeiten."
         )
 
         if user_prompt:
@@ -476,20 +744,14 @@ else:
                 st.markdown(user_prompt)
 
             with st.chat_message("assistant"):
-                with st.spinner("Analysiere Fachwissen und Dokumente..."):
+                with st.spinner("Suche relevante Nutzerdokumentstellen und Fachquellen..."):
                     try:
                         expert_db = get_expert_database()
 
-                        user_document_text = (
-                            st.session_state.extracted_text
-                            if st.session_state.extracted_text
-                            else "Der Nutzer hat keine persönlichen Dokumente hochgeladen."
-                        )
-
-                        answer, sources = generate_rag_answer(
+                        answer, user_sources, expert_sources = generate_rag_answer(
                             expert_db=expert_db,
                             user_question=user_prompt,
-                            user_document_text=user_document_text,
+                            user_documents=st.session_state.user_documents,
                         )
 
                         st.markdown(answer)
@@ -501,17 +763,32 @@ else:
                             }
                         )
 
-                        st.session_state.last_sources = sources
+                        st.session_state.last_user_sources = user_sources
+                        st.session_state.last_expert_sources = expert_sources
 
                     except Exception as e:
                         st.error(f"KI-Fehler: {e}")
 
-        if st.session_state.last_sources:
+        if st.session_state.last_user_sources or st.session_state.last_expert_sources:
             st.divider()
+
+        if st.session_state.last_user_sources:
+            st.subheader("Verwendete Nutzerdokumentstellen")
+
+            for source in st.session_state.last_user_sources:
+                title = f"Nutzerdokument {source['nr']}: {source['source']}"
+
+                if source["page"]:
+                    title += f" — Seite {source['page']}"
+
+                with st.expander(title):
+                    st.write(source["preview"])
+
+        if st.session_state.last_expert_sources:
             st.subheader("Verwendete Fachquellen")
 
-            for source in st.session_state.last_sources:
-                title = f"Quelle {source['nr']}: {source['source']}"
+            for source in st.session_state.last_expert_sources:
+                title = f"Fachquelle {source['nr']}: {source['source']}"
 
                 if source["page"]:
                     title += f" — Seite {source['page']}"

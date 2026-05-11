@@ -1,9 +1,9 @@
 import os
+import shutil
 from typing import List
 
 from dotenv import load_dotenv
 
-# Verhindert teilweise, dass Webseiten einfache Bot-Anfragen blockieren.
 os.environ["USER_AGENT"] = "PflegeAssistentStudienprojekt/1.0"
 
 from langchain_community.document_loaders import PyPDFDirectoryLoader, WebBaseLoader
@@ -16,8 +16,7 @@ load_dotenv()
 
 DATA_DIR = os.getenv("DATA_DIR", "./daten")
 CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
-
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3")
 
 URLS_TO_LEARN = [
     "https://www.bundesgesundheitsministerium.de/themen/pflege/pflegebeduerftigkeit/pflegegrade.html",
@@ -33,18 +32,31 @@ URLS_TO_LEARN = [
 
 def load_pdf_documents() -> List[Document]:
     if not os.path.exists(DATA_DIR):
-        print(f"⚠️ Ordner '{DATA_DIR}' existiert nicht. Bitte anlegen.")
+        print(f"⚠️ Ordner '{DATA_DIR}' existiert nicht.")
         return []
 
     loader = PyPDFDirectoryLoader(DATA_DIR)
     docs = loader.load()
 
+    cleaned_docs = []
+
     for doc in docs:
+        content = clean_text(doc.page_content)
+
+        if len(content.strip()) < 100:
+            continue
+
+        doc.page_content = content
         doc.metadata["document_type"] = "pdf"
         doc.metadata["knowledge_type"] = "fachwissen"
 
-    print(f"📄 {len(docs)} PDF-Seiten geladen.")
-    return docs
+        source = doc.metadata.get("source", "Unbekannte PDF")
+        doc.metadata["source"] = source.replace("\\", "/")
+
+        cleaned_docs.append(doc)
+
+    print(f"📄 {len(cleaned_docs)} verwertbare PDF-Seiten geladen.")
+    return cleaned_docs
 
 
 def load_web_documents() -> List[Document]:
@@ -58,30 +70,53 @@ def load_web_documents() -> List[Document]:
             docs = loader.load()
 
             for doc in docs:
+                content = clean_text(doc.page_content)
+
+                if len(content.strip()) < 100:
+                    continue
+
+                doc.page_content = content
                 doc.metadata["source"] = url
                 doc.metadata["document_type"] = "webseite"
                 doc.metadata["knowledge_type"] = "fachwissen"
 
-            all_web_docs.extend(docs)
+                all_web_docs.append(doc)
+
             print(f"✅ Webseite geladen: {url}")
 
         except Exception as e:
             print(f"⚠️ Fehler beim Laden von {url}: {e}")
 
-    print(f"🌐 {len(all_web_docs)} Webseiten-Dokumente geladen.")
+    print(f"🌐 {len(all_web_docs)} verwertbare Webseiten-Dokumente geladen.")
     return all_web_docs
 
 
+def clean_text(text: str) -> str:
+    text = text.replace("\x00", " ")
+    text = text.replace("\t", " ")
+    text = text.replace("  ", " ")
+
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            lines.append(line)
+
+    return "\n".join(lines)
+
+
 def split_documents(documents: List[Document]) -> List[Document]:
-    print("✂️ Teile Dokumente in Chunks...")
+    print("✂️ Teile Dokumente in bessere Chunks...")
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
+        chunk_size=850,
+        chunk_overlap=180,
         separators=[
             "\n\n",
             "\n",
             ". ",
+            "; ",
+            ", ",
             " ",
             "",
         ],
@@ -89,11 +124,32 @@ def split_documents(documents: List[Document]) -> List[Document]:
 
     chunks = splitter.split_documents(documents)
 
-    for index, chunk in enumerate(chunks):
-        chunk.metadata["chunk_id"] = index
+    cleaned_chunks = []
+    seen = set()
 
-    print(f"✅ {len(chunks)} Textabschnitte erstellt.")
-    return chunks
+    for index, chunk in enumerate(chunks):
+        content = clean_text(chunk.page_content)
+
+        if len(content) < 120:
+            continue
+
+        source = chunk.metadata.get("source", "")
+        page = chunk.metadata.get("page", "")
+        duplicate_key = (source, page, content[:300])
+
+        if duplicate_key in seen:
+            continue
+
+        seen.add(duplicate_key)
+
+        chunk.page_content = content
+        chunk.metadata["chunk_id"] = index
+        chunk.metadata["chunk_size"] = len(content)
+
+        cleaned_chunks.append(chunk)
+
+    print(f"✅ {len(cleaned_chunks)} eindeutige Textabschnitte erstellt.")
+    return cleaned_chunks
 
 
 def build_expert_database():
@@ -115,20 +171,18 @@ def build_expert_database():
 
     chunks = split_documents(documents)
 
-    print("🧠 Erstelle Embeddings und speichere in ChromaDB...")
+    if os.path.exists(CHROMA_DIR):
+        print(f"🗑️ Lösche alte ChromaDB unter '{CHROMA_DIR}', um Duplikate zu vermeiden.")
+        shutil.rmtree(CHROMA_DIR)
 
+    print(f"🧠 Erstelle Embeddings mit Modell: {EMBEDDING_MODEL}")
     embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
 
-    # Hinweis:
-    # Bei erneutem Ausführen wird die bestehende ChromaDB überschrieben,
-    # damit keine alten/veralteten Duplikate bleiben.
-    if os.path.exists(CHROMA_DIR):
-        print(f"⚠️ Bestehende ChromaDB unter '{CHROMA_DIR}' wird aktualisiert/überschrieben.")
-
-    vectorstore = Chroma.from_documents(
+    Chroma.from_documents(
         documents=chunks,
         embedding=embeddings,
         persist_directory=CHROMA_DIR,
+        collection_name="pflege_fachwissen",
     )
 
     print("✅ Wissensdatenbank erfolgreich erstellt.")
