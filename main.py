@@ -10,7 +10,7 @@ from langchain_core.output_parsers import StrOutputParser
 load_dotenv()
 
 CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3")
 LLM_MODEL = os.getenv("LLM_MODEL", "mistral-nemo")
 
 
@@ -45,9 +45,17 @@ def main():
     vector_db = Chroma(
         persist_directory=CHROMA_DIR,
         embedding_function=embeddings,
+        collection_name="pflege_fachwissen",
     )
 
-    retriever = vector_db.as_retriever(search_kwargs={"k": 8})
+    retriever = vector_db.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": 8,
+            "fetch_k": 35,
+            "lambda_mult": 0.4,
+        },
+    )
 
     llm = OllamaLLM(
         model=LLM_MODEL,
@@ -84,7 +92,7 @@ Antwort:
             print("Programm beendet.")
             break
 
-        print("\n⏳ Suche relevante Dokumente...")
+        print("\n⏳ Suche relevante Fachquellen...")
 
         docs = retriever.invoke(user_question)
         context = format_docs(docs)
