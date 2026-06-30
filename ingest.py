@@ -1,8 +1,12 @@
 import os
 import shutil
+import warnings
 from typing import List
 
 from dotenv import load_dotenv
+
+# Ignoriere die Langchain-Zukunftswarnungen für ein sauberes Terminal
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 os.environ["USER_AGENT"] = "PflegeAssistentStudienprojekt/1.0"
 
@@ -178,12 +182,23 @@ def build_expert_database():
     print(f"🧠 Erstelle Embeddings mit Modell: {EMBEDDING_MODEL}")
     embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
 
-    Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
+    # 1. Leere Datenbank initialisieren
+    vector_db = Chroma(
+        embedding_function=embeddings,
         persist_directory=CHROMA_DIR,
         collection_name="pflege_fachwissen",
     )
+
+    # 2. Die Abschnitte in 100er-Häppchen (Batches) an Ollama senden
+    batch_size = 100
+    total_chunks = len(chunks)
+    print(f"📦 Sende {total_chunks} Textabschnitte in {batch_size}er-Batches an Ollama...")
+
+    for i in range(0, total_chunks, batch_size):
+        batch = chunks[i : i + batch_size]
+        vector_db.add_documents(batch)
+        current_end = min(i + batch_size, total_chunks)
+        print(f"  -> Batch {i//batch_size + 1} erfolgreich: Abschnitte {i+1} bis {current_end} von {total_chunks} verarbeitet.")
 
     print("✅ Wissensdatenbank erfolgreich erstellt.")
     print(f"📁 Speicherort: {CHROMA_DIR}")
