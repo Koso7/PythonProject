@@ -1,26 +1,29 @@
 import os
 import shutil
 import warnings
+import requests
 from typing import List
 
 from dotenv import load_dotenv
+from docling.document_converter import DocumentConverter  # NEU: IBM Docling Engine
 
-# Ignoriere die Langchain-Zukunftswarnungen für ein sauberes Terminal
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+os.environ["USER_AGENT"] = "PflegeAssistent"
 
-os.environ["USER_AGENT"] = "PflegeAssistentStudienprojekt/1.0"
-
-from langchain_community.document_loaders import PyPDFDirectoryLoader, WebBaseLoader
+from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
+from langchain_qdrant import QdrantVectorStore
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter  # Harmonisiert
+from langchain_core.embeddings import Embeddings
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
 
 load_dotenv()
 
 DATA_DIR = os.getenv("DATA_DIR", "./daten")
-CHROMA_DIR = os.getenv("CHROMA_DIR", "./chroma_db")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3")
+QDRANT_DIR = os.getenv("QDRANT_DIR", "./qdrant_db")
+EMBEDDING_MODEL = "text-embedding-bge-m3"
+COLLECTION_NAME = "pflege_fachwissen"
 
 URLS_TO_LEARN = [
     "https://www.bundesgesundheitsministerium.de/themen/pflege/pflegebeduerftigkeit/pflegegrade.html",
@@ -34,175 +37,107 @@ URLS_TO_LEARN = [
 ]
 
 
-def load_pdf_documents() -> List[Document]:
-    if not os.path.exists(DATA_DIR):
-        print(f"⚠️ Ordner '{DATA_DIR}' existiert nicht.")
-        return []
+class LMStudioEmbeddings(Embeddings):
+    def __init__(self, base_url="http://localhost:1234/v1", model=EMBEDDING_MODEL):
+        self.base_url = base_url
+        self.model = model
 
-    loader = PyPDFDirectoryLoader(DATA_DIR)
-    docs = loader.load()
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        response = requests.post(
+            f"{self.base_url}/embeddings",
+            json={"input": texts, "model": self.model}
+        )
+        response.raise_for_status()
+        return [data["embedding"] for data in response.json()["data"]]
 
-    cleaned_docs = []
+    def embed_query(self, text: str) -> List[float]:
+        return self.embed_documents([text])[0]
 
-    for doc in docs:
-        content = clean_text(doc.page_content)
 
-        if len(content.strip()) < 100:
-            continue
+def clean_text(text: str) -> str:
+    text = text.replace("\x00", " ").replace("\t", " ").replace("  ", " ")
+    return "\n".join([line.rstrip() for line in text.splitlines() if line.strip()])
 
-        doc.page_content = content
-        doc.metadata["document_type"] = "pdf"
-        doc.metadata["knowledge_type"] = "fachwissen"
 
-        source = doc.metadata.get("source", "Unbekannte PDF")
-        doc.metadata["source"] = source.replace("\\", "/")
+def load_pdf_documents_as_markdown() -> List[Document]:
+    if not os.path.exists(DATA_DIR): return []
+    docs = []
+    pdf_files = [f for f in os.listdir(DATA_DIR) if f.lower().endswith(".pdf")]
 
-        cleaned_docs.append(doc)
+    # Docling Instanziierung
+    converter = DocumentConverter()
 
-    print(f"📄 {len(cleaned_docs)} verwertbare PDF-Seiten geladen.")
-    return cleaned_docs
+    for file_name in pdf_files:
+        try:
+            print(f"📄 Docling konvertiert: {file_name}...")
+            file_path = os.path.join(DATA_DIR, file_name).replace("\\", "/")
+
+            # Konvertierung mit Docling
+            result = converter.convert(file_path)
+            md_text = result.document.export_to_markdown()
+
+            if len(md_text.strip()) < 100: continue
+            docs.append(
+                Document(page_content=clean_text(md_text), metadata={"source": file_name, "document_type": "pdf"}))
+        except Exception as e:
+            print(f"Fehler bei {file_name}: {e}")
+    return docs
 
 
 def load_web_documents() -> List[Document]:
     all_web_docs = []
-
-    print("🌐 Lade Webseiten...")
-
     for url in URLS_TO_LEARN:
         try:
-            loader = WebBaseLoader(url)
-            docs = loader.load()
-
-            for doc in docs:
+            for doc in WebBaseLoader(url).load():
                 content = clean_text(doc.page_content)
-
-                if len(content.strip()) < 100:
-                    continue
-
+                if len(content.strip()) < 100: continue
                 doc.page_content = content
-                doc.metadata["source"] = url
-                doc.metadata["document_type"] = "webseite"
-                doc.metadata["knowledge_type"] = "fachwissen"
-
+                doc.metadata.update({"source": url, "document_type": "webseite"})
                 all_web_docs.append(doc)
-
-            print(f"✅ Webseite geladen: {url}")
-
         except Exception as e:
-            print(f"⚠️ Fehler beim Laden von {url}: {e}")
-
-    print(f"🌐 {len(all_web_docs)} verwertbare Webseiten-Dokumente geladen.")
+            print(f"Fehler bei {url}: {e}")
     return all_web_docs
 
 
-def clean_text(text: str) -> str:
-    text = text.replace("\x00", " ")
-    text = text.replace("\t", " ")
-    text = text.replace("  ", " ")
+def split_documents_intelligently(documents: List[Document]) -> List[Document]:
+    print("✂️ Teile Dokumente logisch auf (Markdown Header + Recursive Splitter)...")
+    md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")],
+                                             strip_headers=False)
+    recursive_splitter = RecursiveCharacterTextSplitter(chunk_size=750, chunk_overlap=160)
 
-    lines = []
-    for line in text.splitlines():
-        line = line.strip()
-        if line:
-            lines.append(line)
-
-    return "\n".join(lines)
-
-
-def split_documents(documents: List[Document]) -> List[Document]:
-    print("✂️ Teile Dokumente in bessere Chunks...")
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=850,
-        chunk_overlap=180,
-        separators=[
-            "\n\n",
-            "\n",
-            ". ",
-            "; ",
-            ", ",
-            " ",
-            "",
-        ],
-    )
-
-    chunks = splitter.split_documents(documents)
-
-    cleaned_chunks = []
-    seen = set()
-
-    for index, chunk in enumerate(chunks):
-        content = clean_text(chunk.page_content)
-
-        if len(content) < 120:
-            continue
-
-        source = chunk.metadata.get("source", "")
-        page = chunk.metadata.get("page", "")
-        duplicate_key = (source, page, content[:300])
-
-        if duplicate_key in seen:
-            continue
-
-        seen.add(duplicate_key)
-
-        chunk.page_content = content
-        chunk.metadata["chunk_id"] = index
-        chunk.metadata["chunk_size"] = len(content)
-
-        cleaned_chunks.append(chunk)
-
-    print(f"✅ {len(cleaned_chunks)} eindeutige Textabschnitte erstellt.")
-    return cleaned_chunks
+    final_chunks = []
+    for doc in documents:
+        header_splits = md_splitter.split_text(doc.page_content) if doc.metadata.get("document_type") == "pdf" else [
+            doc]
+        for h_split in header_splits: h_split.metadata.update(doc.metadata)
+        final_chunks.extend(recursive_splitter.split_documents(header_splits))
+    return final_chunks
 
 
 def build_expert_database():
-    print("=" * 70)
-    print("📚 Starte Aufbau der Pflegegrad-Wissensdatenbank")
-    print("=" * 70)
+    print("🚀 Starte Aufbau via LM Studio API & Docling...")
+    all_docs = load_pdf_documents_as_markdown() + load_web_documents()
+    if not all_docs: return
 
-    documents = []
+    embeddings = LMStudioEmbeddings()
+    chunks = split_documents_intelligently(all_docs)
 
-    pdf_docs = load_pdf_documents()
-    web_docs = load_web_documents()
+    if os.path.exists(QDRANT_DIR): shutil.rmtree(QDRANT_DIR)
 
-    documents.extend(pdf_docs)
-    documents.extend(web_docs)
-
-    if not documents:
-        print("❌ Keine Dokumente gefunden. Abbruch.")
-        return
-
-    chunks = split_documents(documents)
-
-    if os.path.exists(CHROMA_DIR):
-        print(f"🗑️ Lösche alte ChromaDB unter '{CHROMA_DIR}', um Duplikate zu vermeiden.")
-        shutil.rmtree(CHROMA_DIR)
-
-    print(f"🧠 Erstelle Embeddings mit Modell: {EMBEDDING_MODEL}")
-    embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
-
-    # 1. Leere Datenbank initialisieren
-    vector_db = Chroma(
-        embedding_function=embeddings,
-        persist_directory=CHROMA_DIR,
-        collection_name="pflege_fachwissen",
+    client = QdrantClient(path=QDRANT_DIR)
+    client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(size=len(embeddings.embed_query("Test")), distance=Distance.COSINE),
     )
 
-    # 2. Die Abschnitte in 100er-Häppchen (Batches) an Ollama senden
-    batch_size = 100
-    total_chunks = len(chunks)
-    print(f"📦 Sende {total_chunks} Textabschnitte in {batch_size}er-Batches an Ollama...")
+    vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION_NAME, embedding=embeddings)
 
-    for i in range(0, total_chunks, batch_size):
-        batch = chunks[i : i + batch_size]
-        vector_db.add_documents(batch)
-        current_end = min(i + batch_size, total_chunks)
-        print(f"  -> Batch {i//batch_size + 1} erfolgreich: Abschnitte {i+1} bis {current_end} von {total_chunks} verarbeitet.")
+    batch_size = 50
+    for i in range(0, len(chunks), batch_size):
+        vector_store.add_documents(chunks[i: i + batch_size])
+        print(f"  -> Batch {i // batch_size + 1} von {len(chunks) // batch_size + 1} gespeichert.")
 
-    print("✅ Wissensdatenbank erfolgreich erstellt.")
-    print(f"📁 Speicherort: {CHROMA_DIR}")
-    print("=" * 70)
+    print("✅ Wissensdatenbank fertig!")
 
 
 if __name__ == "__main__":
