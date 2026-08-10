@@ -1,11 +1,10 @@
 import os
 import shutil
 import warnings
-import requests
 from typing import List
 
 from dotenv import load_dotenv
-from docling.document_converter import DocumentConverter  # NEU: IBM Docling Engine
+from docling.document_converter import DocumentConverter
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 os.environ["USER_AGENT"] = "PflegeAssistent"
@@ -13,8 +12,8 @@ os.environ["USER_AGENT"] = "PflegeAssistent"
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
-from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter  # Harmonisiert
-from langchain_core.embeddings import Embeddings
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 
@@ -24,6 +23,7 @@ DATA_DIR = os.getenv("DATA_DIR", "./daten")
 QDRANT_DIR = os.getenv("QDRANT_DIR", "./qdrant_db")
 EMBEDDING_MODEL = "text-embedding-bge-m3"
 COLLECTION_NAME = "pflege_fachwissen"
+LM_STUDIO_URL = "http://localhost:1234/v1"
 
 URLS_TO_LEARN = [
     "https://www.bundesgesundheitsministerium.de/themen/pflege/pflegebeduerftigkeit/pflegegrade.html",
@@ -37,23 +37,6 @@ URLS_TO_LEARN = [
 ]
 
 
-class LMStudioEmbeddings(Embeddings):
-    def __init__(self, base_url="http://localhost:1234/v1", model=EMBEDDING_MODEL):
-        self.base_url = base_url
-        self.model = model
-
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        response = requests.post(
-            f"{self.base_url}/embeddings",
-            json={"input": texts, "model": self.model}
-        )
-        response.raise_for_status()
-        return [data["embedding"] for data in response.json()["data"]]
-
-    def embed_query(self, text: str) -> List[float]:
-        return self.embed_documents([text])[0]
-
-
 def clean_text(text: str) -> str:
     text = text.replace("\x00", " ").replace("\t", " ").replace("  ", " ")
     return "\n".join([line.rstrip() for line in text.splitlines() if line.strip()])
@@ -64,15 +47,12 @@ def load_pdf_documents_as_markdown() -> List[Document]:
     docs = []
     pdf_files = [f for f in os.listdir(DATA_DIR) if f.lower().endswith(".pdf")]
 
-    # Docling Instanziierung
     converter = DocumentConverter()
 
     for file_name in pdf_files:
         try:
             print(f"📄 Docling konvertiert: {file_name}...")
             file_path = os.path.join(DATA_DIR, file_name).replace("\\", "/")
-
-            # Konvertierung mit Docling
             result = converter.convert(file_path)
             md_text = result.document.export_to_markdown()
 
@@ -100,16 +80,21 @@ def load_web_documents() -> List[Document]:
 
 
 def split_documents_intelligently(documents: List[Document]) -> List[Document]:
-    print("✂️ Teile Dokumente logisch auf (Markdown Header + Recursive Splitter)...")
+    print("✂️ Teile Dokumente logisch auf...")
     md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")],
                                              strip_headers=False)
     recursive_splitter = RecursiveCharacterTextSplitter(chunk_size=750, chunk_overlap=160)
 
     final_chunks = []
     for doc in documents:
-        header_splits = md_splitter.split_text(doc.page_content) if doc.metadata.get("document_type") == "pdf" else [
-            doc]
-        for h_split in header_splits: h_split.metadata.update(doc.metadata)
+        # Versuche Markdown-Splitter, falle auf gesamtes Dokument zurück, falls leer
+        header_splits = md_splitter.split_text(doc.page_content)
+        if not header_splits:
+            header_splits = [doc]
+
+        for h_split in header_splits:
+            h_split.metadata.update(doc.metadata)
+
         final_chunks.extend(recursive_splitter.split_documents(header_splits))
     return final_chunks
 
@@ -117,17 +102,28 @@ def split_documents_intelligently(documents: List[Document]) -> List[Document]:
 def build_expert_database():
     print("🚀 Starte Aufbau via LM Studio API & Docling...")
     all_docs = load_pdf_documents_as_markdown() + load_web_documents()
-    if not all_docs: return
+    if not all_docs:
+        print("Keine Dokumente gefunden.")
+        return
 
-    embeddings = LMStudioEmbeddings()
+    # OpenAI Embeddings Klasse zeigt auf lokalen LM Studio Server
+    embeddings = OpenAIEmbeddings(
+        openai_api_base=LM_STUDIO_URL,
+        openai_api_key="lm-studio",
+        model=EMBEDDING_MODEL
+    )
+
     chunks = split_documents_intelligently(all_docs)
 
     if os.path.exists(QDRANT_DIR): shutil.rmtree(QDRANT_DIR)
 
     client = QdrantClient(path=QDRANT_DIR)
+    # Test-Embedding abrufen um Vektor-Größe zu bestimmen
+    vector_size = len(embeddings.embed_query("Test"))
+
     client.create_collection(
         collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=len(embeddings.embed_query("Test")), distance=Distance.COSINE),
+        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
     )
 
     vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION_NAME, embedding=embeddings)
@@ -135,7 +131,7 @@ def build_expert_database():
     batch_size = 50
     for i in range(0, len(chunks), batch_size):
         vector_store.add_documents(chunks[i: i + batch_size])
-        print(f"  -> Batch {i // batch_size + 1} von {len(chunks) // batch_size + 1} gespeichert.")
+        print(f"  -> Batch {i // batch_size + 1} von {(len(chunks) - 1) // batch_size + 1} gespeichert.")
 
     print("✅ Wissensdatenbank fertig!")
 
