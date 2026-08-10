@@ -110,7 +110,8 @@ def build_expert_database():
     embeddings = OpenAIEmbeddings(
         openai_api_base=LM_STUDIO_URL,
         openai_api_key="lm-studio",
-        model=EMBEDDING_MODEL
+        model=EMBEDDING_MODEL,
+        check_embedding_ctx_length=False
     )
 
     chunks = split_documents_intelligently(all_docs)

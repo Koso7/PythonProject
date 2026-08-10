@@ -34,7 +34,8 @@ def main():
     embeddings = OpenAIEmbeddings(
         openai_api_base=LM_STUDIO_URL,
         openai_api_key="lm-studio",
-        model=EMBEDDING_MODEL
+        model=EMBEDDING_MODEL,
+        check_embedding_ctx_length=False
     )
 
     client = QdrantClient(path=QDRANT_DIR)

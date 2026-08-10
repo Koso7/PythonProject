@@ -102,7 +102,31 @@ def generate_pdf_letter(absender_name, absender_adresse, kasse_name, kasse_adres
     pdf = FPDF()
     pdf.add_page()
 
-    # Helvitica ist im Standard-Lieferumfang von fpdf2 und unterstützt deutsche Umlaute via latin-1 (welches fpdf2 intern regelt)
+    # --- NEU: Sonderzeichen-Filter für PDF-Kompatibilität ---
+    def clean_pdf_text(text):
+        if not text: return ""
+        replacements = {
+            "–": "-", "—": "-",  # Lange Gedankenstriche zu Bindestrichen
+            "„": '"', "“": '"', "”": '"',  # Geschwungene Anführungszeichen zu geraden
+            "‘": "'", "’": "'",  # Typografische Apostrophe zu geraden
+            "•": "-",  # Bulletpoints zu Bindestrichen
+            "€": "Euro"  # Euro-Zeichen sicherheitshalber ausschreiben
+        }
+        for alt, neu in replacements.items():
+            text = text.replace(alt, neu)
+        return text
+
+    # Texte vor dem Einfügen bereinigen
+    absender_name = clean_pdf_text(absender_name)
+    absender_adresse = clean_pdf_text(absender_adresse)
+    kasse_name = clean_pdf_text(kasse_name)
+    kasse_adresse = clean_pdf_text(kasse_adresse)
+    versichert_name = clean_pdf_text(versichert_name)
+    versichert_nr = clean_pdf_text(versichert_nr)
+    brief_text = clean_pdf_text(brief_text)
+    # ---------------------------------------------------------
+
+    # Helvetica ist im Standard-Lieferumfang von fpdf2
     pdf.set_font("Helvetica", size=11)
 
     # Absender
@@ -157,7 +181,8 @@ def get_embeddings():
     return OpenAIEmbeddings(
         openai_api_base=LM_STUDIO_URL,
         openai_api_key="lm-studio",
-        model=EMBEDDING_MODEL
+        model=EMBEDDING_MODEL,
+        check_embedding_ctx_length=False
     )
 
 
@@ -326,7 +351,7 @@ FACHWISSEN:
 
 
 # ------------------------------------------------------------
-# LOGIN & REGISTRIERUNG (unverändert)
+# LOGIN & REGISTRIERUNG
 # ------------------------------------------------------------
 if st.session_state.token is None:
     st.title("🛡️ Pflegehilfe Online - Portal")
