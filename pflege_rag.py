@@ -425,16 +425,25 @@ def load_all_expert_chunks(vector_store: QdrantVectorStore, limit: int = 20000) 
 # ---------------------------------------------------------------------------
 # HYBRIDE SUCHE
 # ---------------------------------------------------------------------------
+_PARAGRAPH_RE = re.compile(r"§+\s*(\d+[a-z]?)", re.IGNORECASE)
+
+
 def tokenize(text: str) -> List[str]:
     """Zerlegt Text für die Stichwortsuche in bedeutungstragende Wörter.
 
-    Umlaute werden vereinheitlicht, damit "Mobilität" aus einem digitalen PDF
-    und "Mobilitaet" aus einer Texterkennung dasselbe Wort ergeben.
+    Zwei Besonderheiten:
+
+    * Umlaute werden vereinheitlicht, damit "Mobilität" aus einem digitalen PDF
+      und "Mobilitaet" aus einer Texterkennung dasselbe Wort ergeben.
+    * Paragrafenangaben werden zu einem Wort zusammengezogen ("§ 18" -> "§18").
+      Getrennt betrachtet fielen beide Teile durch die Mindestlänge und eine
+      Suche nach "§ 18 SGB XI" hätte den Paragrafen gar nicht berücksichtigt.
     """
+    normalisiert = _PARAGRAPH_RE.sub(r"§\1", normalize(text))
     return [
         wort
-        for wort in _WORD_RE.findall(normalize(text))
-        if len(wort) > 2 and wort not in _NORMALIZED_STOPWORDS
+        for wort in _WORD_RE.findall(normalisiert)
+        if len(wort) >= 2 and wort not in _NORMALIZED_STOPWORDS
     ]
 
 

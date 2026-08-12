@@ -29,3 +29,8 @@ daten/privat/
 
 # Lokal erzeugte ONNX-Modelle fuer den Betrieb auf der Grafikkarte (mehrere GB)
 modelle/
+
+# Testabdeckung
+.pytest_cache/
+.coverage
+htmlcov/
