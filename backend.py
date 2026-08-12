@@ -1,3 +1,22 @@
+"""Hintergrunddienst für die Sitzungsverwaltung.
+
+Verwaltet anonyme Sitzungen ohne Registrierung: Eine Sitzung wird ausschließlich
+über einen zufälligen Zugangscode angesprochen. Der gespeicherte Arbeitsstand
+(Gesprächsverlauf, Textabschnitte der Unterlagen, Widerspruchsentwurf,
+Formularangaben) liegt verschlüsselt in der Datenbank.
+
+Datenschutz:
+* Der Zugangscode ist Primärschlüssel und wird nie doppelt vergeben.
+* Gelöschte Sitzungen werden durch ``secure_delete`` und ein Neuschreiben der
+  Datei tatsächlich aus der Datenbank entfernt, nicht nur als frei markiert.
+* Ein Hintergrundlauf entfernt abgelaufene Sitzungen selbsttätig.
+* Der Dienst lauscht nur auf der örtlichen Netzwerkschnittstelle.
+
+Start:  uvicorn backend:app --port 8000
+"""
+
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -12,6 +31,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, DateTime, LargeBinary, String, create_engine, event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession, declarative_base, sessionmaker
 
 load_dotenv()
@@ -204,22 +224,44 @@ def _get_valid_record(db: DbSession, token: str) -> SessionRecord:
 # ------------------------------------------------------------
 # ENDPUNKTE
 # ------------------------------------------------------------
+MAX_TOKEN_VERSUCHE = 8
+
+
 @app.post("/session", response_model=SessionCreateResponse)
 def create_session(db: DbSession = Depends(get_db)):
-    """Neue, leere Sitzung ohne jede Registrierung. Der Token ist ab sofort
-    der einzige Weg, später an diese Daten zu gelangen."""
-    token = secrets.token_urlsafe(32)
+    """Legt eine neue, leere Sitzung ohne jede Registrierung an.
+
+    Der Zugangscode wird garantiert nicht doppelt vergeben: Die Spalte ist
+    Primärschlüssel, zusätzlich wird vor dem Einfügen geprüft und ein
+    gleichzeitig entstandener Doppelgänger über die Ausnahme abgefangen.
+    Erst wenn eine Sitzung gelöscht ist, könnte ihr Code theoretisch wieder
+    vergeben werden.
+    """
     now = utcnow()
-    record = SessionRecord(
-        token=token,
-        created_at=now,
-        expires_at=now + timedelta(days=SESSION_LIFETIME_DAYS),
-        last_accessed_at=now,
-        data_encrypted=_encrypt({}),
+    for _ in range(MAX_TOKEN_VERSUCHE):
+        token = secrets.token_urlsafe(32)
+        if db.query(SessionRecord).filter(SessionRecord.token == token).first() is not None:
+            continue
+        record = SessionRecord(
+            token=token,
+            created_at=now,
+            expires_at=now + timedelta(days=SESSION_LIFETIME_DAYS),
+            last_accessed_at=now,
+            data_encrypted=_encrypt({}),
+        )
+        db.add(record)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Zwei Anfragen haben zeitgleich denselben Code erzeugt.
+            db.rollback()
+            continue
+        return SessionCreateResponse(token=token, expires_at=record.expires_at)
+
+    raise HTTPException(
+        status_code=503,
+        detail="Es konnte kein eindeutiger Zugangscode erzeugt werden. Bitte erneut versuchen.",
     )
-    db.add(record)
-    db.commit()
-    return SessionCreateResponse(token=token, expires_at=record.expires_at)
 
 
 @app.get("/session/{token}", response_model=SessionLoadResponse)

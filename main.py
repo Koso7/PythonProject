@@ -1,118 +1,116 @@
-import os
+"""Diagnosewerkzeug für die Kommandozeile.
+
+Führt eine Frage durch dieselbe Such- und Antwortkette wie die Weboberfläche
+und zeigt dabei offen, welche Abschnitte gefunden, wie sie bewertet und welche
+davon tatsächlich zitiert wurden. Damit lässt sich die Antwortqualität prüfen,
+ohne die Oberfläche zu starten.
+
+Aufruf:
+    python main.py                      – Dialogbetrieb
+    python main.py "Meine Frage"        – eine einzelne Frage
+
+Hinweis: Die Vektordatenbank kann nur von einem Prozess gleichzeitig geöffnet
+werden. Die Weboberfläche muss dafür beendet sein.
+"""
+
+from __future__ import annotations
+
+import sys
 import textwrap
+import time
 
 from dotenv import load_dotenv
-from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+
+import pflege_rag
 
 load_dotenv()
 
-QDRANT_DIR = os.getenv("QDRANT_DIR", "./qdrant_db")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-bge-m3")
-LLM_MODEL = os.getenv("LLM_MODEL", "mistralai/mistral-nemo-instruct-2407")
-LM_STUDIO_URL = "http://localhost:1234/v1"
+BREITE = 100
 
 
-def format_docs(docs):
-    parts = []
-    for index, doc in enumerate(docs, start=1):
-        source = doc.metadata.get("source", "Unbekannte Quelle")
-        parts.append(f"Quelle {index}: {source}\n{doc.page_content}")
-    return "\n\n---\n\n".join(parts)
+def trennlinie(zeichen: str = "-") -> None:
+    print(zeichen * BREITE)
 
 
-def main():
-    print("=" * 70)
-    print("🏥 Pflege-KI Konsolentest (Qdrant & LM Studio)")
-    print("Tippe 'exit' zum Beenden.")
-    print("=" * 70)
+def zeige_quellen(ergebnis: pflege_rag.RetrievalResult, zitiert: set[int]) -> None:
+    trennlinie()
+    print("GEFUNDENE ABSCHNITTE")
+    trennlinie()
+    for quelle in ergebnis.quellen:
+        markierung = "zitiert " if quelle.nummer in zitiert else "ungenutzt"
+        herkunft = "Nutzerunterlage" if quelle.herkunft == "nutzer" else "Fachwissen"
+        print(f"[{quelle.nummer}] {markierung} | Bewertung {quelle.bewertung:5.3f} | {herkunft}")
+        print(f"     Quelle: {quelle.quelle}")
+        if quelle.ueberschrift:
+            print(f"     Abschnitt: {quelle.ueberschrift}")
+        for zeile in textwrap.wrap(quelle.ausschnitt, BREITE - 7):
+            print(f"     {zeile}")
+        print()
 
-    # Einheitliche Embeddings via LangChain OpenAI (kompatibel mit LM Studio)
-    embeddings = OpenAIEmbeddings(
-        openai_api_base=LM_STUDIO_URL,
-        openai_api_key="lm-studio",
-        model=EMBEDDING_MODEL,
-        check_embedding_ctx_length=False
+
+def beantworte(frage: str, index, reranker, llm) -> None:
+    start = time.time()
+    ergebnis = pflege_rag.prepare_context(index, None, frage, reranker=reranker)
+    suchdauer = time.time() - start
+
+    print("\nAntwort:")
+    trennlinie()
+    start = time.time()
+    antwort = "".join(
+        pflege_rag.stream_answer(llm, pflege_rag.build_messages(ergebnis.system_prompt, [
+            {"role": "user", "content": frage}
+        ]))
     )
+    antwortdauer = time.time() - start
 
-    client = QdrantClient(path=QDRANT_DIR)
-    vector_db = QdrantVectorStore(
-        client=client,
-        collection_name="pflege_fachwissen",
-        embedding=embeddings
-    )
+    zitiert = set(pflege_rag.cited_numbers(antwort)) & set(ergebnis.nummern)
+    print(pflege_rag.render_citations(antwort, ergebnis.nummern))
+    print()
+    zeige_quellen(ergebnis, zitiert)
 
-    retriever = vector_db.as_retriever(
-        search_type="mmr",
-        search_kwargs={
-            "k": 5,
-            "fetch_k": 20,
-            "lambda_mult": 0.5,
-        },
-    )
+    ohne_beleg = "keine" if zitiert else "KEINE – die Antwort nennt keine Belegstelle!"
+    print(f"Suche {suchdauer:.1f}s | Antwort {antwortdauer:.1f}s | "
+          f"{len(ergebnis.quellen)} Abschnitte gefunden | zitiert: {sorted(zitiert) or ohne_beleg}")
 
-    # Einheitliches LLM via LangChain OpenAI (kompatibel mit LM Studio)
-    llm = ChatOpenAI(
-        base_url=LM_STUDIO_URL,
-        api_key="lm-studio",
-        model=LLM_MODEL,
-        temperature=0.0,
-    )
 
-    template = """
-Du bist ein KI-gestützter Assistenzdienst zum Thema Pflegegrad und Pflegegrad-Widerspruch.
+def main() -> int:
+    print("=" * BREITE)
+    print("Pflege-Assistent – Diagnose der Antwortqualität")
+    print("=" * BREITE)
 
-Regeln:
-- Antworte ausschließlich auf Grundlage des bereitgestellten Kontexts.
-- Erfinde keine rechtlichen, medizinischen oder pflegefachlichen Fakten.
-- Wenn die Antwort im Kontext nicht enthalten ist, sage:
-  "Dazu gibt es in den vorliegenden Pflege-Dokumenten keine ausreichenden Informationen."
-- Schreibe vollständig auf Deutsch.
-- Weise bei rechtlichen Fragen darauf hin, dass keine Rechtsberatung ersetzt wird.
+    print("Wissensdatenbank wird geöffnet …")
+    index = pflege_rag.HybridIndex(None, [])
+    try:
+        speicher = pflege_rag.open_expert_database(pflege_rag.create_embeddings())
+        abschnitte = pflege_rag.load_all_expert_chunks(speicher)
+        index = pflege_rag.HybridIndex(speicher, abschnitte)
+        print(f"  {len(abschnitte)} Abschnitte geladen.")
+    except Exception as fehler:
+        print(f"  Fehler: {fehler}")
+        print("  Läuft die Weboberfläche noch? Sie sperrt die Vektordatenbank.")
+        return 1
 
-Kontext:
-{context}
+    print("Neubewertungsmodell wird geladen (einmalig, etwa 20 Sekunden) …")
+    reranker = pflege_rag.create_reranker()
+    llm = pflege_rag.create_llm()
+    print("Bereit.\n")
 
-Frage:
-{question}
-"""
+    if len(sys.argv) > 1:
+        beantworte(" ".join(sys.argv[1:]), index, reranker, llm)
+        return 0
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", template)
-    ])
-
-    chain = prompt | llm | StrOutputParser()
-
+    print("Frage eingeben, 'exit' zum Beenden.")
     while True:
-        user_question = input("\nDeine Frage: ")
-
-        if user_question.lower().strip() == "exit":
-            print("Programm beendet.")
-            break
-
-        print("\n⏳ Suche relevante Fachquellen...")
-        docs = retriever.invoke(user_question)
-        context = format_docs(docs)
-
-        print("⏳ KI erstellt Antwort...\n")
-        response = chain.invoke({
-            "context": context,
-            "question": user_question,
-        })
-
-        print("🤖 Antwort:")
-        print(textwrap.fill(response, width=100))
-
-        print("\n📚 Verwendete Quellen:")
-        for index, doc in enumerate(docs, start=1):
-            source = doc.metadata.get("source", "Unbekannte Quelle")
-            print(f"{index}. {source}")
-
-        print("-" * 70)
+        try:
+            frage = input("\nFrage: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if frage.lower() in {"exit", "quit", "ende"}:
+            return 0
+        if frage:
+            beantworte(frage, index, reranker, llm)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,6 +1,8 @@
+# Weboberfläche
 streamlit
 requests
-pypdf
+
+# Hintergrunddienst für die Sitzungsverwaltung
 fastapi
 uvicorn
 sqlalchemy
@@ -8,6 +10,7 @@ cryptography
 pydantic
 python-dotenv
 
+# Sprachmodell- und Retrieval-Orchestrierung
 langchain
 langchain-core
 langchain-community
@@ -15,7 +18,17 @@ langchain-text-splitters
 langchain-qdrant
 langchain-openai
 
+# Vektordatenbank
 qdrant-client
+
+# Dokumentenverarbeitung (PDF nach Text, inklusive Texterkennung für Scans)
 docling
+pypdf
 beautifulsoup4
+
+# Hybride Suche: Stichwortsuche und Neubewertung der Treffer
+rank-bm25
+sentence-transformers
+
+# Erzeugung des Widerspruchsschreibens
 fpdf2

@@ -1,141 +1,295 @@
+"""Aufbau der Wissensdatenbank aus Fachdokumenten und geprüften Webseiten.
+
+Aufruf:  python ingest.py
+
+Das Skript liest alle PDF-Dateien aus ``daten/`` sowie die unten aufgeführten
+Webseiten ein, zerlegt sie in Abschnitte und legt sie in der Vektordatenbank ab.
+Am Ende steht ein Prüfbericht, der für jedes Dokument zeigt, wie viel Text
+gewonnen wurde und wie viele Abschnitte daraus entstanden sind. So lässt sich
+belegen, dass wirklich jedes Dokument vollständig gelesen wurde.
+
+Hinweis: Solange die Weboberfläche läuft, ist die Vektordatenbank gesperrt.
+Bitte vor dem Aufruf beenden.
+"""
+
+from __future__ import annotations
+
 import os
 import shutil
+import sys
+import time
 import warnings
+from dataclasses import dataclass
 from typing import List
 
 from dotenv import load_dotenv
-from docling.document_converter import DocumentConverter
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-os.environ["USER_AGENT"] = "PflegeAssistent"
+os.environ.setdefault("USER_AGENT", "PflegeAssistent/2.0 (Universitaeres Studienprojekt)")
 
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
-from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
+
+import pflege_rag
 
 load_dotenv()
 
 DATA_DIR = os.getenv("DATA_DIR", "./daten")
 QDRANT_DIR = os.getenv("QDRANT_DIR", "./qdrant_db")
-EMBEDDING_MODEL = "text-embedding-bge-m3"
-COLLECTION_NAME = "pflege_fachwissen"
-LM_STUDIO_URL = "http://localhost:1234/v1"
+BATCH_SIZE = 32
 
+# Unterlagen einzelner Personen gehören NICHT in die gemeinsame Wissensdatenbank.
+# Sie würden sonst als allgemeines "Fachwissen" in den Antworten anderer
+# Ratsuchender auftauchen und deren Fall mit fremden Angaben vermischen.
+# Solche Dateien eignen sich weiterhin zum Testen des Uploads in der Oberfläche.
+EXCLUDED_FILES = {
+    "Gutachten3.pdf",
+    "MD_Sachsen-Anhalt_Gesundheitsdaten_REAL.pdf",
+}
+
+# Geprüfte Quellen: Behörden, Medizinischer Dienst, Verbraucherzentrale und
+# Sozialverbände. Bewusst keine Werbeseiten von Anbietern.
 URLS_TO_LEARN = [
+    # --- Amtliche Stellen ---
     "https://www.bundesgesundheitsministerium.de/themen/pflege/pflegebeduerftigkeit/pflegegrade.html",
-    "https://www.pflege.de/pflegekasse-pflegerecht/pflegegrade/widerspruch/",
-    "https://www.verbraucherzentrale.de/wissen/gesundheit-pflege/pflegeantrag-und-leistungen/pflegegrad-abgelehnt-so-wehren-sie-sich-mit-widerspruch-und-klage-11547",
-    "https://www.vdk.de/aktuelles/aktuelle-meldungen/artikel/widerspruch-gegen-pflegegrad-lohnt-sich-oft/",
-    "https://www.pflege-betreuer.de/de/pflegewissen/pflegerecht-und-ansprueche/widerspruch-gegen-die-pflegegrad-einstufung-einlegen",
-    "https://www.verbraucherzentrale.de/wissen/gesundheit-pflege/pflegeantrag-und-leistungen/pflegegrad-beantragen-so-gehts-13413",
-    "https://www.pflege.de/pflegekasse-pflegerecht/pflegegrade/beantragen/",
     "https://www.bundesgesundheitsministerium.de/themen/pflege/online-ratgeber-pflege/pflegebeduerftig-was-nun",
+    "https://md-bund.de/themen/pflegebeduerftigkeit-und-pflegebegutachtung/das-begutachtungsinstrument.html",
+    "https://md-bund.de/themen/pflegebeduerftigkeit-und-pflegebegutachtung/begutachtungs-richtlinien.html",
+    "https://md-bund.de/themen/pflegebeduerftigkeit-und-pflegebegutachtung/fragen-und-antworten.html",
+    # --- Verbraucherschutz und Sozialverbände ---
+    "https://www.verbraucherzentrale.de/wissen/gesundheit-pflege/pflegeantrag-und-leistungen/pflegegrad-abgelehnt-so-wehren-sie-sich-mit-widerspruch-und-klage-11547",
+    "https://www.verbraucherzentrale.de/wissen/gesundheit-pflege/pflegeantrag-und-leistungen/pflegegrad-beantragen-so-gehts-13413",
+    "https://www.verbraucherzentrale.de/wissen/gesundheit-pflege/pflegeantrag-und-leistungen/begutachtung-durch-medizinischen-dienst-so-koennen-sie-sich-vorbereiten-13414",
+    "https://www.vdk.de/aktuelles/aktuelle-meldungen/artikel/widerspruch-gegen-pflegegrad-lohnt-sich-oft/",
+    "https://www.betanet.de/pflegetagebuch.html",
+    # --- Fachportale ---
+    "https://www.pflege.de/pflegekasse-pflegerecht/pflegegrade/widerspruch/",
+    "https://www.pflege.de/pflegekasse-pflegerecht/pflegegrade/beantragen/",
+    "https://www.pflege.de/pflegende-angehoerige/pflegefall/pflegetagebuch/",
+    "https://www.pflegeberatung.de/pflegeanspruch/begutachtung/das-begutachtungsinstrument",
+    "https://www.pflege-betreuer.de/de/pflegewissen/pflegerecht-und-ansprueche/widerspruch-gegen-die-pflegegrad-einstufung-einlegen",
 ]
 
 
-def clean_text(text: str) -> str:
-    text = text.replace("\x00", " ").replace("\t", " ").replace("  ", " ")
-    return "\n".join([line.rstrip() for line in text.splitlines() if line.strip()])
+@dataclass
+class IngestReport:
+    """Prüfergebnis für ein einzelnes Dokument."""
+
+    name: str
+    seiten: int = 0
+    zeichen: int = 0
+    abschnitte: int = 0
+    ocr: bool = False
+    sekunden: float = 0.0
+    fehler: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return not self.fehler and self.abschnitte > 0
 
 
-def load_pdf_documents_as_markdown() -> List[Document]:
-    if not os.path.exists(DATA_DIR): return []
-    docs = []
-    pdf_files = [f for f in os.listdir(DATA_DIR) if f.lower().endswith(".pdf")]
+def build_converters() -> tuple[DocumentConverter, DocumentConverter]:
+    """Erzeugt zwei Umwandler: einen schnellen und einen mit Texterkennung.
 
-    converter = DocumentConverter()
+    Digitale PDFs brauchen keine Texterkennung und werden dadurch um ein
+    Vielfaches schneller eingelesen. Eingescannte Unterlagen brauchen sie
+    zwingend, sonst bleibt ihr Inhalt unsichtbar.
+    """
+    schnell = PdfPipelineOptions()
+    schnell.do_ocr = False
+    schnell.do_table_structure = True
 
-    for file_name in pdf_files:
-        try:
-            print(f"📄 Docling konvertiert: {file_name}...")
-            file_path = os.path.join(DATA_DIR, file_name).replace("\\", "/")
-            result = converter.convert(file_path)
-            md_text = result.document.export_to_markdown()
+    mit_ocr = PdfPipelineOptions()
+    mit_ocr.do_ocr = True
+    mit_ocr.do_table_structure = True
 
-            if len(md_text.strip()) < 100: continue
-            docs.append(
-                Document(page_content=clean_text(md_text), metadata={"source": file_name, "document_type": "pdf"}))
-        except Exception as e:
-            print(f"Fehler bei {file_name}: {e}")
-    return docs
-
-
-def load_web_documents() -> List[Document]:
-    all_web_docs = []
-    for url in URLS_TO_LEARN:
-        try:
-            for doc in WebBaseLoader(url).load():
-                content = clean_text(doc.page_content)
-                if len(content.strip()) < 100: continue
-                doc.page_content = content
-                doc.metadata.update({"source": url, "document_type": "webseite"})
-                all_web_docs.append(doc)
-        except Exception as e:
-            print(f"Fehler bei {url}: {e}")
-    return all_web_docs
-
-
-def split_documents_intelligently(documents: List[Document]) -> List[Document]:
-    print("✂️ Teile Dokumente logisch auf...")
-    md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")],
-                                             strip_headers=False)
-    recursive_splitter = RecursiveCharacterTextSplitter(chunk_size=750, chunk_overlap=160)
-
-    final_chunks = []
-    for doc in documents:
-        # Versuche Markdown-Splitter, falle auf gesamtes Dokument zurück, falls leer
-        header_splits = md_splitter.split_text(doc.page_content)
-        if not header_splits:
-            header_splits = [doc]
-
-        for h_split in header_splits:
-            h_split.metadata.update(doc.metadata)
-
-        final_chunks.extend(recursive_splitter.split_documents(header_splits))
-    return final_chunks
-
-
-def build_expert_database():
-    print("🚀 Starte Aufbau via LM Studio API & Docling...")
-    all_docs = load_pdf_documents_as_markdown() + load_web_documents()
-    if not all_docs:
-        print("Keine Dokumente gefunden.")
-        return
-
-    # OpenAI Embeddings Klasse zeigt auf lokalen LM Studio Server
-    embeddings = OpenAIEmbeddings(
-        openai_api_base=LM_STUDIO_URL,
-        openai_api_key="lm-studio",
-        model=EMBEDDING_MODEL,
-        check_embedding_ctx_length=False
+    return (
+        DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=schnell)}),
+        DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=mit_ocr)}),
     )
 
-    chunks = split_documents_intelligently(all_docs)
 
-    if os.path.exists(QDRANT_DIR): shutil.rmtree(QDRANT_DIR)
+def zaehle_seiten(pfad: str) -> int:
+    try:
+        from pypdf import PdfReader
+
+        return len(PdfReader(pfad).pages)
+    except Exception:
+        return 0
+
+
+def lade_pdf_dokumente() -> tuple[List[Document], List[IngestReport]]:
+    """Liest alle PDF-Dateien aus dem Datenordner ein."""
+    if not os.path.isdir(DATA_DIR):
+        print(f"Ordner {DATA_DIR} nicht gefunden.")
+        return [], []
+
+    alle = sorted(f for f in os.listdir(DATA_DIR) if f.lower().endswith(".pdf"))
+    dateien = [f for f in alle if f not in EXCLUDED_FILES]
+    for uebersprungen in sorted(set(alle) & EXCLUDED_FILES):
+        print(f"      übersprungen (Unterlage einer einzelnen Person): {uebersprungen}")
+    if not dateien:
+        return [], []
+
+    schnell, mit_ocr = build_converters()
+    dokumente: List[Document] = []
+    berichte: List[IngestReport] = []
+
+    for nummer, dateiname in enumerate(dateien, start=1):
+        pfad = os.path.join(DATA_DIR, dateiname).replace("\\", "/")
+        bericht = IngestReport(name=dateiname, seiten=zaehle_seiten(pfad))
+        bericht.ocr = not pflege_rag.pdf_has_text_layer(pfad)
+
+        art = "Texterkennung" if bericht.ocr else "digital"
+        print(f"[{nummer}/{len(dateien)}] {dateiname} ({bericht.seiten} Seiten, {art}) …", flush=True)
+
+        start = time.time()
+        try:
+            umwandler = mit_ocr if bericht.ocr else schnell
+            ergebnis = umwandler.convert(pfad)
+            markdown = pflege_rag.clean_text(ergebnis.document.export_to_markdown())
+            bericht.zeichen = len(markdown)
+
+            if bericht.zeichen < 200:
+                bericht.fehler = "Kaum Text gewonnen – vermutlich Bildqualität zu schlecht."
+            else:
+                dokumente.append(
+                    Document(
+                        page_content=markdown,
+                        metadata={
+                            "source": dateiname,
+                            "document_type": "fachdokument",
+                            "doc_kind": pflege_rag.classify_document(dateiname),
+                        },
+                    )
+                )
+        except Exception as fehler:
+            bericht.fehler = f"{type(fehler).__name__}: {str(fehler)[:90]}"
+
+        bericht.sekunden = time.time() - start
+        print(f"      {bericht.zeichen} Zeichen in {bericht.sekunden:.0f}s"
+              f"{' – ' + bericht.fehler if bericht.fehler else ''}", flush=True)
+        berichte.append(bericht)
+
+    return dokumente, berichte
+
+
+def lade_webseiten() -> tuple[List[Document], List[IngestReport]]:
+    """Liest die geprüften Webseiten ein."""
+    dokumente: List[Document] = []
+    berichte: List[IngestReport] = []
+
+    for nummer, url in enumerate(URLS_TO_LEARN, start=1):
+        kurz = url.split("//")[-1][:64]
+        bericht = IngestReport(name=url)
+        start = time.time()
+        try:
+            geladen = WebBaseLoader(url).load()
+            text = pflege_rag.clean_text("\n".join(d.page_content for d in geladen))
+            bericht.zeichen = len(text)
+            if bericht.zeichen < 400:
+                bericht.fehler = "Zu wenig Inhalt – Seite vermutlich nicht abrufbar."
+            else:
+                dokumente.append(
+                    Document(
+                        page_content=text,
+                        metadata={"source": url, "document_type": "webseite", "doc_kind": "Webseite"},
+                    )
+                )
+        except Exception as fehler:
+            bericht.fehler = f"{type(fehler).__name__}: {str(fehler)[:90]}"
+
+        bericht.sekunden = time.time() - start
+        status = bericht.fehler or f"{bericht.zeichen} Zeichen"
+        print(f"[{nummer}/{len(URLS_TO_LEARN)}] {kurz} – {status}", flush=True)
+        berichte.append(bericht)
+
+    return dokumente, berichte
+
+
+def drucke_pruefbericht(berichte: List[IngestReport]) -> None:
+    """Zeigt für jedes Dokument, ob es vollständig verarbeitet wurde."""
+    print("\n" + "=" * 96)
+    print("PRÜFBERICHT – wurde jedes Dokument vollständig gelesen?")
+    print("=" * 96)
+    print(f"{'Dokument':<52}{'Seiten':>7}{'Zeichen':>10}{'Abschn.':>9}{'OCR':>5}{'Zeit':>7}  Status")
+    print("-" * 96)
+    for bericht in berichte:
+        name = bericht.name if len(bericht.name) <= 50 else bericht.name[:47] + "..."
+        status = "OK" if bericht.ok else (bericht.fehler or "keine Abschnitte")
+        seiten = str(bericht.seiten) if bericht.seiten else "-"
+        print(f"{name:<52}{seiten:>7}{bericht.zeichen:>10}{bericht.abschnitte:>9}"
+              f"{'ja' if bericht.ocr else '-':>5}{bericht.sekunden:>6.0f}s  {status}")
+    print("-" * 96)
+    fehlerhaft = [b for b in berichte if not b.ok]
+    print(f"{len(berichte) - len(fehlerhaft)} von {len(berichte)} Quellen erfolgreich verarbeitet.")
+    if fehlerhaft:
+        print("\nNicht verwertbar:")
+        for bericht in fehlerhaft:
+            print(f"  - {bericht.name}: {bericht.fehler or 'keine Abschnitte erzeugt'}")
+
+
+def build_expert_database() -> int:
+    print("=" * 96)
+    print("AUFBAU DER WISSENSDATENBANK")
+    print("=" * 96)
+
+    print("\n--- PDF-Dokumente ---")
+    pdf_docs, pdf_berichte = lade_pdf_dokumente()
+
+    print("\n--- Webseiten ---")
+    web_docs, web_berichte = lade_webseiten()
+
+    alle_docs = pdf_docs + web_docs
+    if not alle_docs:
+        print("\nKeine verwertbaren Quellen gefunden. Abbruch.")
+        return 1
+
+    print("\n--- Abschnitte bilden ---")
+    berichte = pdf_berichte + web_berichte
+    nach_quelle: dict[str, int] = {}
+    alle_chunks: List[Document] = []
+    for doc in alle_docs:
+        chunks = pflege_rag.split_documents([doc])
+        nach_quelle[doc.metadata["source"]] = len(chunks)
+        alle_chunks.extend(chunks)
+    for bericht in berichte:
+        bericht.abschnitte = nach_quelle.get(bericht.name, 0)
+
+    print(f"{len(alle_chunks)} verwertbare Abschnitte aus {len(alle_docs)} Quellen.")
+
+    print("\n--- Einbettungen berechnen und speichern ---")
+    embeddings = pflege_rag.create_embeddings()
+    vektorgroesse = len(embeddings.embed_query("Test"))
+
+    if os.path.exists(QDRANT_DIR):
+        shutil.rmtree(QDRANT_DIR)
 
     client = QdrantClient(path=QDRANT_DIR)
-    # Test-Embedding abrufen um Vektor-Größe zu bestimmen
-    vector_size = len(embeddings.embed_query("Test"))
-
     client.create_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+        collection_name=pflege_rag.COLLECTION_NAME,
+        vectors_config=VectorParams(size=vektorgroesse, distance=Distance.COSINE),
+    )
+    speicher = QdrantVectorStore(
+        client=client, collection_name=pflege_rag.COLLECTION_NAME, embedding=embeddings
     )
 
-    vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION_NAME, embedding=embeddings)
+    gesamt = (len(alle_chunks) - 1) // BATCH_SIZE + 1
+    for index in range(0, len(alle_chunks), BATCH_SIZE):
+        speicher.add_documents(alle_chunks[index : index + BATCH_SIZE])
+        print(f"  Block {index // BATCH_SIZE + 1} von {gesamt} gespeichert.", flush=True)
 
-    batch_size = 50
-    for i in range(0, len(chunks), batch_size):
-        vector_store.add_documents(chunks[i: i + batch_size])
-        print(f"  -> Batch {i // batch_size + 1} von {(len(chunks) - 1) // batch_size + 1} gespeichert.")
-
-    print("✅ Wissensdatenbank fertig!")
+    client.close()
+    drucke_pruefbericht(berichte)
+    print("\nWissensdatenbank fertig.")
+    return 0
 
 
 if __name__ == "__main__":
-    build_expert_database()
+    sys.exit(build_expert_database())

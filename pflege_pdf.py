@@ -142,9 +142,25 @@ def strip_letter_boilerplate(text: str) -> str:
     return text.strip()
 
 
+# Belegziffern der Chatantwort. In einem Schreiben an die Pflegekasse haben sie
+# nichts zu suchen - dort gibt es keine Quellenliste, auf die sie verweisen.
+_SUPERSCRIPTS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+_CITATION_MARKS = re.compile(rf"\s*[{_SUPERSCRIPTS}]+")
+
+
+def strip_citations(text: str) -> str:
+    """Entfernt Belegziffern (hochgestellt und in eckigen Klammern)."""
+    if not text:
+        return ""
+    text = _CITATION_MARKS.sub("", text)
+    text = re.sub(r"\s*\[\d{1,2}\]", "", text)
+    # Vor Satzzeichen darf kein Leerzeichen zurückbleiben.
+    return re.sub(r"\s+([.,;:!?])", r"\1", text)
+
+
 def prepare_begruendung(text: str) -> str:
     """Bereitet einen Chat-Text als Begründung für den Brief auf."""
-    return strip_letter_boilerplate(strip_markdown(text or "")).strip()
+    return strip_letter_boilerplate(strip_citations(strip_markdown(text or ""))).strip()
 
 
 # Lückenhafte Stellen, die ein Sprachmodell erzeugt, wenn ihm eine Angabe fehlt.
