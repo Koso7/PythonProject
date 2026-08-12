@@ -1161,6 +1161,19 @@ def render_settings_tab() -> None:
 # ---------------------------------------------------------------------------
 def render_app() -> None:
     render_kopfzeile()
+
+    # Bei einer frischen Installation fehlt die Wissensdatenbank. Ohne diesen
+    # Hinweis antwortet der Assistent scheinbar normal, aber ohne Fachwissen.
+    index = get_expert_index()
+    if index is None or not index.documents:
+        st.error(
+            "**Die Wissensdatenbank fehlt oder ist leer.** Der Assistent kann sich dann nur auf "
+            "Ihre eigenen Unterlagen stützen, nicht auf das geprüfte Fachwissen.\n\n"
+            "Bitte einmalig im Projektordner ausführen (die Weboberfläche muss dafür beendet sein):\n"
+            "```\npython ingest.py\n```",
+            icon="🗄️",
+        )
+
     render_fortschritt()
 
     reiter = st.tabs([

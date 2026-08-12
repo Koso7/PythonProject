@@ -20,11 +20,12 @@ datenbank_dump.txt
 # Virtuelle Umgebung
 .venv/
 
-# Pflegeunterlagen einzelner Personen gehören NICHT in ein öffentliches
-# Repository. Neue Dateien in daten/ müssen bewusst und einzeln hinzugefügt
-# werden (git add -f), nachdem geprüft wurde, dass sie keine
-# personenbezogenen Gesundheitsdaten enthalten.
-daten/
+# Der Ordner daten/ gehört ins Repository: Ohne die Fachdokumente lässt sich
+# die Wissensdatenbank bei einer frischen Installation nicht aufbauen.
+#
+# Unterlagen einzelner Personen gehören dort NICHT hinein. Für solche Dateien
+# ist daten/privat/ vorgesehen - dieser Ordner wird nie mitversioniert.
+daten/privat/
 
 # Lokal erzeugte ONNX-Modelle fuer den Betrieb auf der Grafikkarte (mehrere GB)
 modelle/
