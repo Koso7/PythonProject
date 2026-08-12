@@ -55,6 +55,13 @@ EXCLUDED_FILES = {
 
 # Geprüfte Quellen: Behörden, Medizinischer Dienst, Verbraucherzentrale und
 # Sozialverbände. Bewusst keine Werbeseiten von Anbietern.
+# Gesetzestexte im Wortlaut. Damit kann der Assistent Paragrafen zitieren,
+# statt sie nur aus Ratgebertexten zu umschreiben.
+# § 14: Begriff der Pflegebedürftigkeit · § 15: Ermittlung des Pflegegrades
+# § 18: Verfahren zur Feststellung der Pflegebedürftigkeit
+SGB_XI_PARAGRAFEN = [14, 15, 18]
+SGB_XI_URL = "https://www.gesetze-im-internet.de/sgb_11/__{nummer}.html"
+
 URLS_TO_LEARN = [
     # --- Amtliche Stellen ---
     "https://www.bundesgesundheitsministerium.de/themen/pflege/pflegebeduerftigkeit/pflegegrade.html",
@@ -180,6 +187,56 @@ def lade_pdf_dokumente() -> tuple[List[Document], List[IngestReport]]:
     return dokumente, berichte
 
 
+def lade_gesetzestexte() -> tuple[List[Document], List[IngestReport]]:
+    """Holt die maßgeblichen Paragrafen des SGB XI im Wortlaut.
+
+    Als Quelle wird der amtliche Dienst des Bundesjustizministeriums verwendet.
+    Jeder Paragraf wird ein eigenes Dokument, damit die Quellenangabe später
+    "§ 15 SGB XI" lautet und nicht bloß einen Dateinamen nennt.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    dokumente: List[Document] = []
+    berichte: List[IngestReport] = []
+
+    for nummer in SGB_XI_PARAGRAFEN:
+        bezeichnung = f"§ {nummer} SGB XI"
+        bericht = IngestReport(name=bezeichnung)
+        start = time.time()
+        try:
+            antwort = requests.get(SGB_XI_URL.format(nummer=nummer), timeout=30)
+            antwort.encoding = "utf-8"
+            suppe = BeautifulSoup(antwort.text, "html.parser")
+            inhalt = suppe.find("div", class_="jnhtml") or suppe.find("div", id="paddingLR12")
+            ueberschrift = suppe.find("h1")
+            text = pflege_rag.clean_text(inhalt.get_text("\n", strip=True)) if inhalt else ""
+            bericht.zeichen = len(text)
+
+            if bericht.zeichen < 300:
+                bericht.fehler = "Kein Gesetzestext gefunden – Aufbau der Seite geändert?"
+            else:
+                titel = ueberschrift.get_text(strip=True) if ueberschrift else bezeichnung
+                dokumente.append(
+                    Document(
+                        page_content=f"# {bezeichnung} – {titel}\n\n{text}",
+                        metadata={
+                            "source": bezeichnung,
+                            "document_type": "gesetz",
+                            "doc_kind": "Gesetzestext",
+                        },
+                    )
+                )
+        except Exception as fehler:
+            bericht.fehler = f"{type(fehler).__name__}: {str(fehler)[:90]}"
+
+        bericht.sekunden = time.time() - start
+        print(f"      {bezeichnung}: {bericht.fehler or str(bericht.zeichen) + ' Zeichen'}", flush=True)
+        berichte.append(bericht)
+
+    return dokumente, berichte
+
+
 def lade_webseiten() -> tuple[List[Document], List[IngestReport]]:
     """Liest die geprüften Webseiten ein."""
     dokumente: List[Document] = []
@@ -243,16 +300,19 @@ def build_expert_database() -> int:
     print("\n--- PDF-Dokumente ---")
     pdf_docs, pdf_berichte = lade_pdf_dokumente()
 
+    print("\n--- Gesetzestexte ---")
+    gesetz_docs, gesetz_berichte = lade_gesetzestexte()
+
     print("\n--- Webseiten ---")
     web_docs, web_berichte = lade_webseiten()
 
-    alle_docs = pdf_docs + web_docs
+    alle_docs = pdf_docs + gesetz_docs + web_docs
     if not alle_docs:
         print("\nKeine verwertbaren Quellen gefunden. Abbruch.")
         return 1
 
     print("\n--- Abschnitte bilden ---")
-    berichte = pdf_berichte + web_berichte
+    berichte = pdf_berichte + gesetz_berichte + web_berichte
     nach_quelle: dict[str, int] = {}
     alle_chunks: List[Document] = []
     for doc in alle_docs:

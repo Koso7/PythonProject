@@ -255,3 +255,94 @@ class TestFormatNumberedContext:
 
     def test_meldet_leere_trefferliste(self):
         assert "keine passenden" in rag.format_numbered_context([], [], "Fachwissen")
+
+
+# ---------------------------------------------------------------------------
+# ANSCHLUSSFRAGEN
+# ---------------------------------------------------------------------------
+class TestNeedsCondensing:
+    """Entscheidet, wann eine Frage ohne den Verlauf unverständlich ist."""
+
+    def _verlauf(self):
+        return [
+            {"role": "user", "content": "Wie wird Modul 4 bewertet?"},
+            {"role": "assistant", "content": "Modul 4 zählt 40 Prozent."},
+        ]
+
+    @pytest.mark.parametrize(
+        "frage",
+        ["Und was heißt das für mich?", "Wie komme ich dazu?", "Warum ist das so?"],
+    )
+    def test_erkennt_rueckbezuege(self, frage):
+        assert rag.needs_condensing(frage, self._verlauf())
+
+    def test_laesst_eigenstaendige_fragen_in_ruhe(self):
+        frage = "Welche Frist gilt für den Widerspruch gegen einen Pflegegradbescheid?"
+        assert not rag.needs_condensing(frage, self._verlauf())
+
+    def test_erste_frage_braucht_keine_aufloesung(self):
+        assert not rag.needs_condensing("Und was heißt das?", [])
+
+    def test_lange_fragen_stehen_fuer_sich(self):
+        lang = "Das Gutachten sagt " + "x" * 200
+        assert not rag.needs_condensing(lang, self._verlauf())
+
+
+class TestCondenseQuestion:
+    class _LLM:
+        def __init__(self, antwort): self.antwort = antwort
+        def invoke(self, _):
+            return type("Antwort", (), {"content": self.antwort})()
+
+    def _verlauf(self):
+        return [
+            {"role": "user", "content": "Wie wird Modul 4 bewertet?"},
+            {"role": "assistant", "content": "Modul 4 zählt 40 Prozent."},
+        ]
+
+    def test_uebernimmt_die_umformulierung(self):
+        llm = self._LLM("Was bedeutet die Gewichtung von Modul 4 für meinen Pflegegrad?")
+        ergebnis = rag.condense_question(llm, "Und was heißt das für mich?", self._verlauf())
+        assert "Modul 4" in ergebnis
+
+    def test_faellt_bei_fehler_auf_die_frage_zurueck(self):
+        class Kaputt:
+            def invoke(self, _): raise RuntimeError("nicht erreichbar")
+
+        frage = "Und was heißt das für mich?"
+        assert rag.condense_question(Kaputt(), frage, self._verlauf()) == frage
+
+    def test_verwirft_unbrauchbare_antworten(self):
+        frage = "Und was heißt das für mich?"
+        assert rag.condense_question(self._LLM("ok"), frage, self._verlauf()) == frage
+
+    def test_ruft_das_modell_bei_eigenstaendiger_frage_nicht_auf(self):
+        class Verboten:
+            def invoke(self, _): raise AssertionError("darf nicht aufgerufen werden")
+
+        frage = "Welche Frist gilt für den Widerspruch gegen einen Pflegegradbescheid?"
+        assert rag.condense_question(Verboten(), frage, self._verlauf()) == frage
+
+
+class TestStripContextHeaders:
+    """Das Modell übernimmt gelegentlich die Trennzeilen des Kontexts."""
+
+    def test_entfernt_uebernommene_trennzeile(self):
+        roh = ("----- [1] ----- Herkunft: § 15 SGB XI | Kapitel: Ermittlung\n"
+               "Der Pflegegrad ergibt sich aus den Punkten.")
+        assert rag.strip_context_headers(roh) == "Der Pflegegrad ergibt sich aus den Punkten."
+
+    def test_entfernt_trennzeile_ohne_klammern(self):
+        roh = "----- 3 ----- Herkunft: a.pdf\nInhalt."
+        assert "Herkunft" not in rag.strip_context_headers(roh)
+
+    def test_entfernt_uebrig_gebliebene_striche(self):
+        assert rag.strip_context_headers("----- [2] -----\nInhalt.").strip() == "Inhalt."
+
+    def test_laesst_normale_gedankenstriche_stehen(self):
+        text = "Im Modul 4 - Selbstversorgung - wurde gekürzt."
+        assert rag.strip_context_headers(text) == text
+
+    def test_wird_beim_rendern_angewandt(self):
+        roh = "----- [1] ----- Herkunft: a.pdf\nAussage [1]."
+        assert rag.render_citations(roh, [1]) == "Aussage ¹."

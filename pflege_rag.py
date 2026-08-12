@@ -173,6 +173,8 @@ def detect_modules(text: str) -> List[int]:
 def classify_document(file_name: str) -> str:
     """Ordnet ein Dokument grob ein, damit Quellen verständlich benannt sind."""
     name = file_name.lower()
+    if name.startswith("§") or "sgb" in name.split():
+        return "Gesetzestext"
     if "musterbrief" in name or "widerspruch" in name:
         return "Musterbrief"
     if "richtlinie" in name or "bri" in name or "begutachtungs" in name:
@@ -663,13 +665,33 @@ def build_source_refs(
 
 _CITATION_RE = re.compile(r"\[(\d{1,2})\]")
 
+# Das Sprachmodell übernimmt gelegentlich die Trennzeilen des Kontexts in seine
+# Antwort ("----- [3] ----- Herkunft: … | Kapitel: …"). Ein Verbot im Prompt
+# genügt dafür erwiesenermaßen nicht, deshalb werden sie hier zuverlässig
+# entfernt - unabhängig davon, wie sich das Modell verhält.
+_CONTEXT_HEADER_RE = re.compile(
+    r"-{3,}\s*\[?\d{1,2}\]?\s*-{3,}\s*Herkunft:[^\n]*", re.IGNORECASE
+)
+_LEFTOVER_SEPARATOR_RE = re.compile(r"^\s*-{3,}\s*\[?\d{1,2}\]?\s*-{3,}\s*$", re.MULTILINE)
+
+
+def strip_context_headers(text: str) -> str:
+    """Entfernt versehentlich übernommene Trennzeilen des Kontexts."""
+    if not text:
+        return ""
+    text = _CONTEXT_HEADER_RE.sub("", text)
+    text = _LEFTOVER_SEPARATOR_RE.sub("", text)
+    return text.lstrip("\n ").rstrip()
+
 
 def render_citations(text: str, gueltige_nummern: Sequence[int]) -> str:
     """Wandelt Belegstellen [1] in echte Hochziffern um.
 
     Nummern, die es gar nicht gibt, entfernt die Funktion - sonst verweist die
-    Antwort auf eine Quelle, die in der Liste unten fehlt.
+    Antwort auf eine Quelle, die in der Liste unten fehlt. Übernommene
+    Kontext-Trennzeilen werden zuvor entfernt.
     """
+    text = strip_context_headers(text)
     erlaubt = set(gueltige_nummern)
 
     def ersetzen(treffer: re.Match) -> str:
@@ -899,6 +921,71 @@ def prepare_context(
         quellen=user_quellen + fach_quellen,
         beste_bewertung=beste_bewertung,
     )
+
+
+# Eine Anschlussfrage wie "Und was heißt das für mich?" enthält für sich
+# genommen keine suchbaren Begriffe. Ohne Umformulierung sucht das System nach
+# "was heißt das" und findet nichts Brauchbares.
+CONDENSE_PROMPT = """Formuliere die letzte Frage der ratsuchenden Person zu einer eigenständigen Suchanfrage um.
+
+Regeln:
+- Ersetze Rückbezüge wie "das", "dabei", "dafür" durch das, was im Gespräch gemeint war.
+- Gib ausschließlich die umformulierte Frage zurück, ohne Einleitung und ohne Anführungszeichen.
+- Ist die Frage bereits eigenständig verständlich, gib sie unverändert zurück.
+- Halte dich kurz, höchstens ein Satz.
+
+Bisheriges Gespräch:
+{verlauf}
+
+Letzte Frage: {frage}
+
+Eigenständige Suchanfrage:"""
+
+# Kurze Fragen mit Rückbezug. Längere Fragen stehen meist für sich und
+# rechtfertigen den zusätzlichen Aufruf des Sprachmodells nicht.
+_RUECKBEZUG_RE = re.compile(
+    r"\b(das|dem|dabei|dafür|dazu|davon|darauf|dann|es|dies|diese[rsnm]?|"
+    r"sowas|dort|hier|er|sie|ihn|ihm)\b",
+    re.IGNORECASE,
+)
+CONDENSE_MAX_LENGTH = 120
+
+
+def needs_condensing(frage: str, history: Sequence[dict]) -> bool:
+    """Entscheidet, ob eine Frage ohne den Verlauf unverständlich bleibt."""
+    if not any(n.get("role") == "assistant" for n in history):
+        return False  # Ohne Vorgeschichte gibt es nichts aufzulösen.
+    if len(frage) > CONDENSE_MAX_LENGTH:
+        return False
+    return bool(_RUECKBEZUG_RE.search(frage))
+
+
+def condense_question(llm, frage: str, history: Sequence[dict], max_turns: int = 4) -> str:
+    """Macht aus einer Anschlussfrage eine eigenständige Suchanfrage.
+
+    Wird nur bei kurzen Fragen mit Rückbezug aufgerufen; sonst bliebe der
+    zusätzliche Aufruf des Sprachmodells wirkungslose Wartezeit. Schlägt die
+    Umformulierung fehl, wird mit der ursprünglichen Frage weitergesucht.
+    """
+    if not needs_condensing(frage, history):
+        return frage
+
+    verlauf = "\n".join(
+        f"{'Ratsuchende Person' if n['role'] == 'user' else 'Assistent'}: {n['content'][:400]}"
+        for n in list(history)[-max_turns:]
+    )
+    try:
+        antwort = llm.invoke(
+            [{"role": "user", "content": CONDENSE_PROMPT.format(verlauf=verlauf, frage=frage)}]
+        )
+        umformuliert = str(getattr(antwort, "content", "")).strip().strip('"').split("\n")[0]
+    except Exception:
+        return frage
+
+    # Unbrauchbare Umformulierungen verwerfen: zu kurz, zu lang oder leer.
+    if 8 <= len(umformuliert) <= 300:
+        return umformuliert
+    return frage
 
 
 def build_messages(system_prompt: str, history: Sequence[dict]) -> List[dict]:

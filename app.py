@@ -882,9 +882,17 @@ def generate_answer(suchfrage: str, anweisung: str, zusatzfragen=()) -> tuple[st
         with st.spinner("Der Assistent wird vorbereitet (nur beim ersten Mal) …"):
             reranker = get_reranker()
 
+        # Anschlussfragen wie "Und was heißt das für mich?" enthalten für sich
+        # keine suchbaren Begriffe; sie werden zuvor aufgelöst.
+        eigenstaendig = pflege_rag.condense_question(
+            get_llm(), suchfrage, st.session_state.messages[:-1]
+        )
+        if eigenstaendig != suchfrage:
+            st.caption(f"🔎 Gesucht wurde nach: „{eigenstaendig}“")
+
         with st.spinner("Ihre Unterlagen und das Fachwissen werden durchsucht …"):
             ergebnis = pflege_rag.prepare_context(
-                get_expert_index(), get_user_index(), suchfrage,
+                get_expert_index(), get_user_index(), eigenstaendig,
                 reranker=reranker, extra_queries=zusatzfragen,
             )
 
