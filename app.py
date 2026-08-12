@@ -1,574 +1,1078 @@
+"""Pflegehilfe Online - Unterstützung beim Widerspruch gegen einen Pflegegradbescheid.
+
+Die Oberfläche ist auf gute Lesbarkeit und einfache Bedienung ausgelegt:
+große Schrift, hoher Kontrast, klar sichtbare Tastatur-Markierung, große
+Schaltflächen und durchgehend verständliche Sprache.
+
+Datenschutz: Es gibt keine Registrierung. Eine Sitzung wird ausschließlich über
+einen zufälligen Zugangscode identifiziert. Alle Verarbeitung findet örtlich statt.
+"""
+
+from __future__ import annotations
+
 import datetime
 import os
-import tempfile
-import uuid
-from typing import List, Tuple
+from typing import List, Optional
 
 import requests
 import streamlit as st
 from docling.document_converter import DocumentConverter
 from dotenv import load_dotenv
-
 from langchain_core.documents import Document
-from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-from langchain_qdrant import QdrantVectorStore
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from qdrant_client import QdrantClient
-from fpdf import FPDF
 
-# ------------------------------------------------------------
-# KONFIGURATION
-# ------------------------------------------------------------
+import pflege_pdf
+import pflege_rag
+
 load_dotenv()
 
 st.set_page_config(
-    page_title="Pflege-Assistent Pro",
+    page_title="Pflegehilfe Online",
     page_icon="⚖️",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
-QDRANT_DIR = os.getenv("QDRANT_DIR", "./qdrant_db")
-LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
-EMBEDDING_MODEL = "text-embedding-bge-m3"
-LLM_MODEL = "mistralai/mistral-nemo-instruct-2407"
+# Eingescannte Gutachten des Medizinischen Dienstes sind erfahrungsgemäß groß
+# (20 MB und mehr). Eine zu enge Grenze würde ausgerechnet das wichtigste
+# Dokument abweisen.
+MAX_FILE_SIZE_MB = 30
+MAX_DOCUMENTS = 15
+SESSION_DAYS = 28
 
-MAX_FILE_SIZE_MB = 10
-MAX_TOTAL_TEXT_CHARS = 160_000
+# Diese Angaben werden verschlüsselt beim Zugangscode gespeichert und beim
+# Wiedereinstieg vollständig wiederhergestellt.
+SYNCED_STATE_KEYS = [
+    "messages", "user_documents", "document_names", "last_generated_letter",
+    "absender_name", "absender_strasse", "absender_plz_ort", "absender_ort",
+    "kasse_name", "kasse_strasse", "kasse_plz_ort",
+    "versichert_name", "versichert_nr", "aktenzeichen", "bescheid_datum",
+    "letter_text", "font_scale", "high_contrast",
+]
 
-# ------------------------------------------------------------
-# SESSION STATE
-# ------------------------------------------------------------
-if "token" not in st.session_state: st.session_state.token = None
-if "verify_user" not in st.session_state: st.session_state.verify_user = None
-if "messages" not in st.session_state: st.session_state.messages = []
-if "extracted_text" not in st.session_state: st.session_state.extracted_text = ""
-if "user_documents" not in st.session_state: st.session_state.user_documents = []
-if "last_user_sources" not in st.session_state: st.session_state.last_user_sources = []
-if "last_expert_sources" not in st.session_state: st.session_state.last_expert_sources = []
-if "pending_prompt" not in st.session_state: st.session_state.pending_prompt = None
-if "last_generated_appeal" not in st.session_state: st.session_state.last_generated_appeal = ""
+# Freitextfelder des PDF-Formulars. Sie werden ausschließlich unter ihrem
+# Widget-Schlüssel ("w_" + Name) im Sitzungszustand gehalten. Streamlit-Widgets
+# dürfen nicht gleichzeitig über `value=` und über den Sitzungszustand gesetzt
+# werden - sonst gewinnt der zuvor gespeicherte Widget-Zustand und ein
+# programmgesteuertes Vorbelegen bleibt wirkungslos.
+TEXT_FIELDS = [
+    "absender_name", "absender_strasse", "absender_plz_ort", "absender_ort",
+    "kasse_name", "kasse_strasse", "kasse_plz_ort",
+    "versichert_name", "versichert_nr", "aktenzeichen", "bescheid_datum",
+    "letter_text",
+]
+
+DEFAULT_STATE = {
+    "messages": [],
+    "user_documents": [],
+    "document_names": [],
+    "last_generated_letter": "",
+    "last_user_sources": [],
+    "last_expert_sources": [],
+    "font_scale": "Normal",
+    "high_contrast": False,
+}
+
+FONT_SCALES = {"Normal": 18, "Groß": 21, "Sehr groß": 24}
 
 
-# ------------------------------------------------------------
-# API-HILFSFUNKTIONEN
-# ------------------------------------------------------------
-def auth_headers() -> dict:
-    return {"Authorization": f"Bearer {st.session_state.token}"}
+# ---------------------------------------------------------------------------
+# ZUSTAND
+# ---------------------------------------------------------------------------
+def init_state() -> None:
+    st.session_state.setdefault("token", None)
+    st.session_state.setdefault("expires_at", None)
+    for key, default in DEFAULT_STATE.items():
+        if key not in st.session_state:
+            st.session_state[key] = list(default) if isinstance(default, list) else default
+    for name in TEXT_FIELDS:
+        st.session_state.setdefault(f"w_{name}", "")
 
 
-def api_get_me():
+def get_field(name: str) -> str:
+    """Liest ein Formularfeld aus dem Sitzungszustand."""
+    return st.session_state.get(f"w_{name}", "")
+
+
+def set_field(name: str, value: str) -> None:
+    """Belegt ein Formularfeld vor. Muss vor dem Erzeugen des Widgets geschehen."""
+    st.session_state[f"w_{name}"] = value or ""
+
+
+def reset_local_state() -> None:
+    """Setzt die Anzeige zurück, ohne die gespeicherten Daten anzutasten."""
+    st.session_state.token = None
+    st.session_state.expires_at = None
+    for key, default in DEFAULT_STATE.items():
+        st.session_state[key] = list(default) if isinstance(default, list) else default
+    st.session_state.pop("user_store", None)
+    st.session_state.pop("pdf_bytes", None)
+    # Auch die internen Zustände der Eingabefelder entfernen, damit keine
+    # Angaben aus einer vorherigen Sitzung stehen bleiben.
+    for key in [k for k in list(st.session_state.keys()) if str(k).startswith("w_")]:
+        del st.session_state[key]
+
+
+def utcnow() -> datetime.datetime:
+    """Aktuelle UTC-Zeit ohne Zeitzonenangabe (passend zur Speicherung im Dienst)."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
+def parse_datetime(value) -> Optional[datetime.datetime]:
+    if isinstance(value, datetime.datetime):
+        return value
+    if not value:
+        return None
     try:
-        return requests.get(f"{API_URL}/me", headers=auth_headers(), timeout=10)
+        return datetime.datetime.fromisoformat(str(value).replace("Z", ""))
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# GESTALTUNG
+# ---------------------------------------------------------------------------
+def inject_css() -> None:
+    base_px = FONT_SCALES.get(st.session_state.font_scale, 18)
+    if st.session_state.high_contrast:
+        text, bg, panel, border, primary, muted = (
+            "#000000", "#FFFFFF", "#FFFFFF", "#000000", "#00293D", "#000000",
+        )
+    else:
+        text, bg, panel, border, primary, muted = (
+            "#16202A", "#FFFFFF", "#F1F4F7", "#C6D2DC", "#1B4965", "#41525F",
+        )
+
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --text: {text};
+            --bg: {bg};
+            --panel: {panel};
+            --border: {border};
+            --primary: {primary};
+            --muted: {muted};
+        }}
+
+        /* Grundschriftgröße: skaliert die gesamte Oberfläche mit. */
+        html {{ font-size: {base_px}px; }}
+
+        .stApp {{ background: var(--bg); }}
+
+        /* Begrenzte Zeilenlänge - sehr lange Zeilen sind schwer zu lesen. */
+        .block-container {{
+            max-width: 1120px;
+            padding-top: 2.2rem;
+            padding-bottom: 3rem;
+        }}
+
+        h1 {{ font-size: 2.1rem !important; font-weight: 700 !important; line-height: 1.25 !important; }}
+        h2 {{ font-size: 1.6rem !important; font-weight: 700 !important; }}
+        h3 {{ font-size: 1.25rem !important; font-weight: 700 !important; }}
+
+        p, li, label, .stMarkdown {{
+            font-size: 1rem;
+            line-height: 1.65;
+            color: var(--text);
+        }}
+
+        /* Tastaturbedienung muss jederzeit klar erkennbar sein. */
+        *:focus-visible {{
+            outline: 3px solid var(--primary) !important;
+            outline-offset: 2px !important;
+            border-radius: 4px;
+        }}
+
+        /* Große, gut treffbare Schaltflächen. */
+        .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {{
+            min-height: 3.1rem;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 8px;
+            border: 2px solid var(--primary);
+            padding: 0.5rem 1.1rem;
+        }}
+        .stButton > button[kind="primary"],
+        .stDownloadButton > button,
+        .stFormSubmitButton > button {{
+            background: var(--primary);
+            color: #FFFFFF;
+        }}
+        .stButton > button[kind="secondary"] {{
+            background: #FFFFFF;
+            color: var(--primary);
+        }}
+        .stButton > button:disabled {{
+            opacity: 0.55;
+            border-color: var(--muted);
+        }}
+
+        /* Reiter deutlich größer, aktiver Reiter klar markiert. */
+        .stTabs [data-baseweb="tab-list"] {{
+            gap: 0.35rem;
+            border-bottom: 2px solid var(--border);
+        }}
+        .stTabs [data-baseweb="tab"] {{
+            font-size: 1.02rem;
+            font-weight: 600;
+            padding: 0.85rem 1.1rem;
+            color: var(--muted);
+        }}
+        .stTabs [aria-selected="true"] {{
+            color: var(--primary) !important;
+            border-bottom: 4px solid var(--primary) !important;
+        }}
+
+        /* Eingabefelder mit sichtbarem Rahmen. */
+        .stTextInput input, .stTextArea textarea {{
+            font-size: 1rem !important;
+            border: 2px solid var(--border) !important;
+            border-radius: 8px !important;
+            color: var(--text) !important;
+        }}
+        .stTextInput input:focus, .stTextArea textarea:focus {{
+            border-color: var(--primary) !important;
+        }}
+        .stTextInput label, .stTextArea label, .stSelectbox label,
+        .stRadio label, .stFileUploader label, .stCheckbox label {{
+            font-weight: 600 !important;
+            font-size: 1rem !important;
+            color: var(--text) !important;
+        }}
+
+        /* Hinweisfelder mit kräftiger Umrandung. */
+        [data-testid="stAlert"] {{
+            border-radius: 8px;
+            border-left: 6px solid var(--primary);
+            font-size: 1rem;
+        }}
+
+        /* Chatblasen */
+        [data-testid="stChatMessage"] {{
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem 1.1rem;
+            margin-bottom: 0.8rem;
+        }}
+        [data-testid="stChatInput"] textarea {{ font-size: 1rem !important; }}
+
+        /* Karten für klare Gliederung */
+        .karte {{
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.1rem 1.25rem;
+            margin-bottom: 1rem;
+        }}
+        .karte h3 {{ margin-top: 0 !important; }}
+
+        .schritt {{
+            display: inline-block;
+            background: var(--primary);
+            color: #FFFFFF;
+            font-weight: 700;
+            border-radius: 50%;
+            width: 1.9rem;
+            height: 1.9rem;
+            line-height: 1.9rem;
+            text-align: center;
+            margin-right: 0.5rem;
+        }}
+
+        /* Bewegung reduzieren, wenn das Betriebssystem das verlangt. */
+        @media (prefers-reduced-motion: reduce) {{
+            * {{ animation: none !important; transition: none !important; }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# VERBINDUNG ZUM ÖRTLICHEN SITZUNGSDIENST
+# ---------------------------------------------------------------------------
+def api_create_session():
+    try:
+        response = requests.post(f"{API_URL}/session", timeout=10)
+        return response if response.status_code == 200 else None
     except requests.RequestException:
         return None
 
 
-def logout():
-    st.session_state.token = None
-    st.session_state.messages = []
-    st.session_state.extracted_text = ""
-    st.session_state.user_documents = []
-    st.session_state.last_user_sources = []
-    st.session_state.last_expert_sources = []
-    st.session_state.last_generated_appeal = ""
-    st.rerun()
+def api_load_session(token: str):
+    try:
+        return requests.get(f"{API_URL}/session/{token}", timeout=20)
+    except requests.RequestException:
+        return None
 
 
-# ------------------------------------------------------------
-# TEXT- & PDF-HILFSFUNKTIONEN
-# ------------------------------------------------------------
-def clean_text(text: str) -> str:
-    text = text.replace("\x00", " ").replace("\t", " ").replace("  ", " ")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return "\n".join(lines)
+def api_sync_session(token: str, data: dict) -> None:
+    try:
+        requests.put(f"{API_URL}/session/{token}", json={"data": data}, timeout=25)
+    except requests.RequestException:
+        # Ein fehlgeschlagener Abgleich darf die Bedienung nicht blockieren;
+        # beim nächsten Durchlauf wird erneut versucht zu speichern.
+        pass
 
 
-def remove_duplicate_docs(docs: List[Document]) -> List[Document]:
-    unique_docs = []
-    seen = set()
-    for doc in docs:
-        source = doc.metadata.get("source", "")
-        content_preview = clean_text(doc.page_content)[:350]
-        key = (source, content_preview)
-        if key not in seen:
-            seen.add(key)
-            unique_docs.append(doc)
-    return unique_docs
+def api_extend_session(token: str):
+    try:
+        return requests.post(f"{API_URL}/session/{token}/extend", timeout=10)
+    except requests.RequestException:
+        return None
 
 
-def generate_pdf_letter(absender_name, absender_adresse, kasse_name, kasse_adresse, versichert_name, versichert_nr,
-                        bescheid_datum, brief_text):
-    pdf = FPDF()
-    pdf.add_page()
+def api_delete_session(token: str) -> bool:
+    try:
+        return requests.delete(f"{API_URL}/session/{token}", timeout=20).status_code == 200
+    except requests.RequestException:
+        return False
 
-    # --- NEU: Sonderzeichen-Filter für PDF-Kompatibilität ---
-    def clean_pdf_text(text):
-        if not text: return ""
-        replacements = {
-            "–": "-", "—": "-",  # Lange Gedankenstriche zu Bindestrichen
-            "„": '"', "“": '"', "”": '"',  # Geschwungene Anführungszeichen zu geraden
-            "‘": "'", "’": "'",  # Typografische Apostrophe zu geraden
-            "•": "-",  # Bulletpoints zu Bindestrichen
-            "€": "Euro"  # Euro-Zeichen sicherheitshalber ausschreiben
+
+def serialize_documents(docs: List[Document]) -> list:
+    return [{"page_content": d.page_content, "metadata": d.metadata} for d in docs]
+
+
+def deserialize_documents(raw: list) -> List[Document]:
+    return [
+        Document(page_content=item.get("page_content", ""), metadata=item.get("metadata", {}))
+        for item in (raw or [])
+    ]
+
+
+def sync_session() -> None:
+    if not st.session_state.token:
+        return
+    payload = {}
+    for key in SYNCED_STATE_KEYS:
+        if key in TEXT_FIELDS:
+            payload[key] = get_field(key)
+        elif key == "user_documents":
+            payload[key] = serialize_documents(st.session_state.user_documents)
+        else:
+            payload[key] = st.session_state.get(key)
+    api_sync_session(st.session_state.token, payload)
+
+
+def apply_loaded_data(data: dict) -> None:
+    for key in SYNCED_STATE_KEYS:
+        if key not in data:
+            continue
+        if key in TEXT_FIELDS:
+            set_field(key, data[key])
+        elif key == "user_documents":
+            st.session_state.user_documents = deserialize_documents(data[key])
+        else:
+            st.session_state[key] = data[key]
+    st.session_state.document_names = collect_document_names()
+
+
+def collect_document_names() -> List[str]:
+    return sorted(
+        {
+            doc.metadata.get("source", "")
+            for doc in st.session_state.user_documents
+            if doc.metadata.get("source")
         }
-        for alt, neu in replacements.items():
-            text = text.replace(alt, neu)
-        return text
-
-    # Texte vor dem Einfügen bereinigen
-    absender_name = clean_pdf_text(absender_name)
-    absender_adresse = clean_pdf_text(absender_adresse)
-    kasse_name = clean_pdf_text(kasse_name)
-    kasse_adresse = clean_pdf_text(kasse_adresse)
-    versichert_name = clean_pdf_text(versichert_name)
-    versichert_nr = clean_pdf_text(versichert_nr)
-    brief_text = clean_pdf_text(brief_text)
-    # ---------------------------------------------------------
-
-    # Helvetica ist im Standard-Lieferumfang von fpdf2
-    pdf.set_font("Helvetica", size=11)
-
-    # Absender
-    pdf.cell(0, 5, text=absender_name, new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 5, text=absender_adresse, new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(15)
-
-    # Empfänger (Pflegekasse)
-    pdf.cell(0, 5, text=kasse_name, new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 5, text=kasse_adresse, new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(15)
-
-    # Datum rechtsbündig
-    heute = datetime.date.today().strftime("%d.%m.%Y")
-    pdf.cell(0, 5, text=f"Datum: {heute}", align="R", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(10)
-
-    # Betreff (Fett)
-    pdf.set_font("Helvetica", style="B", size=11)
-    betreff = f"Widerspruch gegen den Bescheid vom {bescheid_datum}"
-    pdf.cell(0, 5, text=betreff, new_x="LMARGIN", new_y="NEXT")
-
-    # Versicherungsnummer
-    pdf.set_font("Helvetica", size=11)
-    pdf.cell(0, 5, text=f"Versicherte Person: {versichert_name}", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 5, text=f"Versichertennummer: {versichert_nr}", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(10)
-
-    # Brieftext (MultiCell für automatischen Zeilenumbruch)
-    pdf.multi_cell(0, 6, text=brief_text)
-
-    pdf.ln(15)
-
-    # Grußformel & Unterschrift
-    pdf.cell(0, 5, text="Mit freundlichen Grüßen,", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(20)
-    pdf.cell(0, 5, text="__________________________________________________", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 5, text=f"(Unterschrift {absender_name})", new_x="LMARGIN", new_y="NEXT")
-
-    return bytes(pdf.output())
+    )
 
 
-# ------------------------------------------------------------
-# KI-/RAG-RESSOURCEN
-# ------------------------------------------------------------
-@st.cache_resource
+# ---------------------------------------------------------------------------
+# ZWISCHENGESPEICHERTE RESSOURCEN (alle örtlich)
+# ---------------------------------------------------------------------------
+@st.cache_resource(show_spinner=False)
 def get_embeddings():
-    return OpenAIEmbeddings(
-        openai_api_base=LM_STUDIO_URL,
-        openai_api_key="lm-studio",
-        model=EMBEDDING_MODEL,
-        check_embedding_ctx_length=False
-    )
+    return pflege_rag.create_embeddings()
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def get_llm():
-    return ChatOpenAI(
-        base_url=LM_STUDIO_URL,
-        api_key="lm-studio",
-        model=LLM_MODEL,
-        temperature=0.2,
-        max_tokens=2000  # Erhöht für längere Briefe
+    return pflege_rag.create_llm()
+
+
+@st.cache_resource(show_spinner=False)
+def get_expert_database():
+    try:
+        return pflege_rag.open_expert_database(get_embeddings())
+    except Exception:
+        return None
+
+
+@st.cache_resource(show_spinner=False)
+def get_converter():
+    return DocumentConverter()
+
+
+def rebuild_user_store() -> None:
+    """Baut den Suchindex der hochgeladenen Unterlagen neu auf (nur im Arbeitsspeicher)."""
+    docs = st.session_state.user_documents
+    st.session_state.user_store = (
+        pflege_rag.build_user_vector_store(docs, get_embeddings()) if docs else None
     )
 
 
-@st.cache_resource
-def get_expert_database():
-    client = QdrantClient(path=QDRANT_DIR)
-    return QdrantVectorStore(client=client, collection_name="pflege_fachwissen", embedding=get_embeddings())
+def get_user_store():
+    if "user_store" not in st.session_state:
+        rebuild_user_store()
+    return st.session_state.user_store
 
 
-# ------------------------------------------------------------
-# PDF-VERARBEITUNG NUTZERDOKUMENTE
-# ------------------------------------------------------------
-def extract_user_documents_from_pdfs(uploaded_files) -> Tuple[str, List[Document]]:
-    full_text = ""
-    raw_docs = []
-    converter = DocumentConverter()
+# ---------------------------------------------------------------------------
+# STARTSEITE
+# ---------------------------------------------------------------------------
+def render_start_page() -> None:
+    st.title("⚖️ Pflegehilfe Online")
+    st.markdown(
+        "#### Unterstützung beim Widerspruch gegen einen Pflegegradbescheid\n"
+        "Diese Anwendung hilft Ihnen, Ihre Pflegeunterlagen zu prüfen und einen Widerspruch "
+        "vorzubereiten. **Sie brauchen sich nicht anzumelden.** Wir fragen weder Ihren Namen "
+        "noch Ihre E-Mail-Adresse ab."
+    )
 
-    for file in uploaded_files:
-        if file.size / (1024 * 1024) > MAX_FILE_SIZE_MB:
-            raise ValueError(f"Die Datei '{file.name}' ist größer als {MAX_FILE_SIZE_MB} MB.")
+    st.markdown("---")
+    links, rechts = st.columns(2, gap="large")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(file.read())
-            tmp_path = tmp.name
+    with links:
+        st.markdown(
+            '<div class="karte"><h3>🆕 Neu anfangen</h3>'
+            "<p>Sie starten eine neue Sitzung. Danach erhalten Sie einen persönlichen "
+            "Zugangscode. Mit diesem Code können Sie später an derselben Stelle weiterarbeiten.</p></div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("Neu anfangen", type="primary", use_container_width=True):
+            response = api_create_session()
+            if response is None:
+                st.error(
+                    "Die Anwendung ist gerade nicht erreichbar. Bitte prüfen Sie, ob der "
+                    "Hintergrunddienst läuft, und versuchen Sie es noch einmal."
+                )
+            else:
+                payload = response.json()
+                st.session_state.token = payload["token"]
+                st.session_state.expires_at = payload["expires_at"]
+                st.rerun()
+
+    with rechts:
+        st.markdown(
+            '<div class="karte"><h3>🔑 Mit Zugangscode fortsetzen</h3>'
+            "<p>Sie haben bereits einen Zugangscode? Dann geben Sie ihn hier ein. Ihre Unterlagen, "
+            "Ihr Gesprächsverlauf und Ihr Schreiben sind dann wieder da.</p></div>",
+            unsafe_allow_html=True,
+        )
+        with st.form("token_form"):
+            token_input = st.text_input(
+                "Ihr Zugangscode",
+                help="Der lange Code, den Sie beim letzten Mal erhalten und aufgeschrieben haben.",
+            )
+            if st.form_submit_button("Weiterarbeiten", use_container_width=True):
+                token = token_input.strip()
+                if not token:
+                    st.error("Bitte geben Sie zuerst Ihren Zugangscode ein.")
+                else:
+                    response = api_load_session(token)
+                    if response is None:
+                        st.error("Die Anwendung ist gerade nicht erreichbar.")
+                    elif response.status_code == 200:
+                        payload = response.json()
+                        st.session_state.token = payload["token"]
+                        st.session_state.expires_at = payload["expires_at"]
+                        apply_loaded_data(payload.get("data", {}))
+                        rebuild_user_store()
+                        st.rerun()
+                    elif response.status_code == 410:
+                        st.error(
+                            "Dieser Zugangscode ist abgelaufen. Aus Datenschutzgründen wurden alle "
+                            "zugehörigen Daten bereits vollständig gelöscht."
+                        )
+                    else:
+                        st.error(
+                            "Dieser Zugangscode ist nicht bekannt. Bitte prüfen Sie Ihre Eingabe "
+                            "auf Tippfehler."
+                        )
+
+    st.markdown("---")
+    st.markdown("### 🔒 Ihre Daten bleiben auf diesem Rechner")
+    spalte1, spalte2 = st.columns(2, gap="large")
+    with spalte1:
+        st.markdown(
+            "- Ihre Unterlagen werden **ausschließlich auf diesem Rechner** verarbeitet.\n"
+            "- Es werden **keine Daten an Unternehmen im Internet** übertragen.\n"
+            "- Gespeicherte Daten sind **verschlüsselt**."
+        )
+    with spalte2:
+        st.markdown(
+            f"- Nach **{SESSION_DAYS // 7} Wochen** wird alles **automatisch und vollständig gelöscht**.\n"
+            "- Sie können die Frist jederzeit um 3 Tage verlängern.\n"
+            "- Sie können alles jederzeit **sofort selbst löschen**."
+        )
+    st.warning(
+        "**Wichtiger Hinweis:** Diese Anwendung ersetzt keine Rechtsberatung. Von der künstlichen "
+        "Intelligenz erstellte Texte müssen Sie vor dem Absenden immer selbst sorgfältig prüfen."
+    )
+
+
+# ---------------------------------------------------------------------------
+# REITER 1: DATEN HOCHLADEN
+# ---------------------------------------------------------------------------
+def render_upload_tab() -> None:
+    st.header("Ihre Unterlagen hochladen")
+    st.markdown(
+        "Laden Sie hier alle Unterlagen hoch, die für den Widerspruch wichtig sind. "
+        "Sie können **mehrere Dateien gleichzeitig** auswählen."
+    )
+    st.info(
+        "**Das hilft besonders:** der Pflegegradbescheid, das Gutachten des Medizinischen "
+        "Dienstes, Ihr Pflegetagebuch, Arztberichte und Krankenhausberichte.",
+        icon="💡",
+    )
+
+    with st.expander("🔒 Datenschutzhinweis – bitte einmal lesen"):
+        st.markdown(
+            """
+**Was mit Ihren Unterlagen passiert**
+
+Ihre Dateien werden ausschließlich auf diesem Rechner gelesen und ausgewertet. Sie werden
+**nicht** an ein Unternehmen im Internet übertragen und **nicht** zum Trainieren von
+künstlicher Intelligenz verwendet. Auch das verwendete Sprachmodell läuft örtlich auf
+diesem Rechner.
+
+**Wie gespeichert wird**
+
+Ihr Arbeitsstand bleibt nur erhalten, wenn Sie Ihren Zugangscode aufbewahren. Alles
+Gespeicherte ist verschlüsselt. Ohne den Zugangscode kann niemand darauf zugreifen.
+
+**Wie gelöscht wird**
+
+Spätestens 4 Wochen nach dem Beginn wird Ihre Sitzung automatisch und vollständig
+gelöscht: der Gesprächsverlauf, die Inhalte Ihrer Unterlagen und Ihr Schreiben. Im Reiter
+**Einstellungen** können Sie alles auch jederzeit sofort selbst löschen.
+
+**Empfehlung**
+
+Laden Sie nur die Unterlagen hoch, die Sie wirklich brauchen. Je weniger sensible Daten
+verarbeitet werden, desto besser.
+            """
+        )
+
+    st.markdown(f"**Erlaubt:** PDF-Dateien, höchstens {MAX_FILE_SIZE_MB} MB je Datei.")
+    uploaded_files = st.file_uploader(
+        "Dateien auswählen",
+        type="pdf",
+        accept_multiple_files=True,
+        help="Mit gedrückter Strg-Taste können Sie mehrere Dateien auf einmal auswählen.",
+    )
+
+    if uploaded_files:
+        st.markdown(
+            f"**{len(uploaded_files)} Datei(en) ausgewählt.** "
+            "Klicken Sie jetzt auf „Unterlagen einlesen“."
+        )
+        if st.button("📥 Unterlagen einlesen", type="primary"):
+            process_uploads(uploaded_files)
+
+    st.markdown("---")
+    render_document_list()
+
+
+def process_uploads(uploaded_files) -> None:
+    """Liest die hochgeladenen PDF-Dateien ein und baut den Suchindex neu auf."""
+    if len(uploaded_files) + len(st.session_state.document_names) > MAX_DOCUMENTS:
+        st.error(
+            f"Es können höchstens {MAX_DOCUMENTS} Dokumente gleichzeitig verarbeitet werden. "
+            "Bitte entfernen Sie zuerst nicht benötigte Unterlagen."
+        )
+        return
+
+    converter = get_converter()
+    fortschritt = st.progress(0.0, text="Die Unterlagen werden gelesen …")
+    neue_dokumente: List[Document] = []
+    hinweise: List[str] = []
+    vorhanden = set(st.session_state.document_names)
+
+    for index, datei in enumerate(uploaded_files, start=1):
+        fortschritt.progress(
+            (index - 1) / len(uploaded_files),
+            text=f"Datei {index} von {len(uploaded_files)} wird gelesen: {datei.name}",
+        )
+
+        if datei.name in vorhanden:
+            hinweise.append(f"„{datei.name}“ wurde übersprungen, weil sie bereits eingelesen ist.")
+            continue
+        if datei.size / (1024 * 1024) > MAX_FILE_SIZE_MB:
+            hinweise.append(f"„{datei.name}“ ist größer als {MAX_FILE_SIZE_MB} MB und wurde übersprungen.")
+            continue
 
         try:
-            result = converter.convert(tmp_path)
-            md_text = result.document.export_to_markdown()
-            md_text = clean_text(md_text)
+            dokument = pflege_rag.extract_document_from_pdf(datei.getvalue(), datei.name, converter)
+        except Exception:
+            # Der technische Fehlertext wird bewusst nicht angezeigt, damit keine
+            # Inhalte aus dem Dokument in einer Meldung erscheinen können.
+            hinweise.append(f"„{datei.name}“ konnte nicht gelesen werden. Ist die Datei beschädigt?")
+            continue
 
-            if len(md_text) > 30:
-                full_text += f"\n\n--- Dokument: {file.name} ---\n{md_text}"
-                raw_docs.append(
-                    Document(page_content=md_text, metadata={"source": file.name, "document_type": "nutzerdokument"}))
-        finally:
-            os.remove(tmp_path)
+        if dokument is None:
+            hinweise.append(
+                f"„{datei.name}“ enthält keinen lesbaren Text. Eingescannte Unterlagen sollten "
+                "in guter Qualität vorliegen."
+            )
+            continue
 
-        if len(full_text) > MAX_TOTAL_TEXT_CHARS:
-            full_text = full_text[:MAX_TOTAL_TEXT_CHARS]
-            full_text += "\n\n[Hinweis: Text gekürzt (Limit erreicht).]"
-            break
+        neue_dokumente.append(dokument)
+        vorhanden.add(datei.name)
 
-    chunks = split_user_documents(raw_docs)
-    return full_text, chunks
+    if neue_dokumente:
+        fortschritt.progress(1.0, text="Die Unterlagen werden durchsuchbar gemacht …")
+        st.session_state.user_documents.extend(pflege_rag.split_documents(neue_dokumente))
+        st.session_state.document_names = collect_document_names()
+        rebuild_user_store()
 
+    fortschritt.empty()
 
-def split_user_documents(raw_docs: List[Document]) -> List[Document]:
-    md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")])
-    recursive_splitter = RecursiveCharacterTextSplitter(chunk_size=750, chunk_overlap=160)
-
-    final_chunks = []
-    seen = set()
-    for doc in raw_docs:
-        header_splits = md_splitter.split_text(doc.page_content)
-        if not header_splits:
-            header_splits = [doc]
-
-        for h_split in header_splits:
-            h_split.metadata.update(doc.metadata)
-
-        for chunk in recursive_splitter.split_documents(header_splits):
-            content = clean_text(chunk.page_content)
-            if len(content) < 80: continue
-
-            key = (chunk.metadata.get("source", ""), content[:300])
-            if key in seen: continue
-            seen.add(key)
-
-            chunk.page_content = content
-            final_chunks.append(chunk)
-
-    return final_chunks
+    if neue_dokumente:
+        st.success(
+            f"**{len(neue_dokumente)} Dokument(e) erfolgreich eingelesen.** "
+            "Sie können jetzt im Reiter „KI-Assistent“ Fragen stellen.",
+            icon="✅",
+        )
+    for meldung in hinweise:
+        st.warning(meldung, icon="⚠️")
+    if not neue_dokumente and not hinweise:
+        st.warning("Es konnten keine neuen Unterlagen eingelesen werden.", icon="⚠️")
 
 
-# ------------------------------------------------------------
-# RETRIEVAL LOGIK
-# ------------------------------------------------------------
-def search_user_documents(user_documents: List[Document], user_question: str, k: int = 4) -> List[Document]:
-    if not user_documents: return []
-    temp_db = QdrantVectorStore.from_documents(
-        documents=user_documents,
-        embedding=get_embeddings(),
-        location=":memory:",
-        collection_name=f"temp_user_docs_{uuid.uuid4().hex}"
-    )
-    return remove_duplicate_docs(temp_db.as_retriever(search_kwargs={"k": k}).invoke(user_question))
+def render_document_list() -> None:
+    st.subheader("Eingelesene Unterlagen")
+    if not st.session_state.document_names:
+        st.info("Sie haben noch keine Unterlagen hochgeladen.", icon="📄")
+        return
+
+    for name in st.session_state.document_names:
+        anzahl = sum(
+            1 for doc in st.session_state.user_documents if doc.metadata.get("source") == name
+        )
+        spalte_name, spalte_knopf = st.columns([5, 1])
+        with spalte_name:
+            st.markdown(f"**📄 {name}**  \n{anzahl} Textabschnitte")
+        with spalte_knopf:
+            if st.button("Entfernen", key=f"remove_{name}", help=f"„{name}“ wieder entfernen"):
+                st.session_state.user_documents = [
+                    doc for doc in st.session_state.user_documents
+                    if doc.metadata.get("source") != name
+                ]
+                st.session_state.document_names = collect_document_names()
+                rebuild_user_store()
+                st.rerun()
 
 
-def build_expert_search_query(user_question: str, relevant_user_docs: List[Document]) -> str:
-    user_doc_excerpt = "\n\n".join(doc.page_content[:900] for doc in relevant_user_docs[:6])
-    return f"""Pflegegrad Widerspruch Musterbrief Pflegekasse Medizinischer Dienst MD Gutachten Begutachtung
-Nutzerfrage: {user_question}
-Relevante Auszüge aus Nutzerdokumenten: {user_doc_excerpt}"""
+# ---------------------------------------------------------------------------
+# REITER 2: KI-ASSISTENT
+# ---------------------------------------------------------------------------
+def render_chat_tab() -> None:
+    st.header("KI-Assistent")
 
-
-def search_expert_documents(expert_db, search_query: str, k: int = 4) -> List[Document]:
-    return remove_duplicate_docs(expert_db.as_retriever(search_kwargs={"k": k}).invoke(search_query))
-
-
-def format_docs_for_prompt(title: str, docs: List[Document]) -> str:
-    if not docs: return f"{title}: Keine relevanten Textstellen gefunden."
-    parts = [title]
-    for index, doc in enumerate(docs, start=1):
-        source = doc.metadata.get("source", "Unbekannte Quelle")
-        parts.append(f"{title} {index}: {source}\n{doc.page_content}")
-    return "\n\n---\n\n".join(parts)
-
-
-def build_source_list(docs: List[Document]) -> List[dict]:
-    sources = []
-    seen = set()
-    for doc in docs:
-        source = doc.metadata.get("source", "Unbekannte Quelle")
-        preview = clean_text(doc.page_content)[:250] + "..." if len(doc.page_content) > 250 else doc.page_content
-        key = (source, preview[:100])
-        if key not in seen:
-            seen.add(key)
-            sources.append({"nr": len(sources) + 1, "source": source, "preview": preview})
-    return sources
-
-
-def generate_rag_answer(expert_db, user_question: str, user_documents: List[Document], chat_history: list) -> Tuple[
-    str, List[dict], List[dict]]:
-    relevant_user_docs = search_user_documents(user_documents, user_question, k=6)
-    expert_search_query = build_expert_search_query(user_question, relevant_user_docs)
-    relevant_expert_docs = search_expert_documents(expert_db, expert_search_query, k=5)
-
-    user_context = format_docs_for_prompt("RELEVANTE NUTZERDOKUMENTSTELLEN", relevant_user_docs)
-    expert_context = format_docs_for_prompt("RELEVANTES FACHWISSEN (inkl. Musterbriefe)", relevant_expert_docs)
-
-    system_prompt = f"""Du bist ein KI-gestützter Assistenzdienst zur strukturierten Vorbereitung eines Pflegegrad-Widerspruchs.
-
-Regeln:
-- Keine Rechtsberatung ersetzen, keine Tatsachen erfinden.
-- Antworte basierend auf den Dokumenten und dem Fachwissen.
-- Falls du einen Widerspruchsbrief verfasst, orientiere dich ZWINGEND an eventuell vorhandenen Musterbriefen im Fachwissen (wie Musterbrief_Bescheid_der_Pflegekasse.pdf). 
-- Formuliere formell, sachlich und behördentauglich.
-
-NUTZERDOKUMENTE:
-{user_context}
-
-FACHWISSEN:
-{expert_context}
-"""
-    llm = get_llm()
-    messages = [{"role": "system", "content": system_prompt}] + chat_history
-
-    try:
-        response = llm.invoke(messages)
-        answer = response.content
-    except Exception as e:
-        answer = f"Verbindungsfehler zur KI: {e}"
-
-    return answer, build_source_list(relevant_user_docs), build_source_list(relevant_expert_docs)
-
-
-# ------------------------------------------------------------
-# LOGIN & REGISTRIERUNG
-# ------------------------------------------------------------
-if st.session_state.token is None:
-    st.title("🛡️ Pflegehilfe Online - Portal")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Login")
-        with st.form("login_form"):
-            username = st.text_input("Nutzername")
-            password = st.text_input("Passwort", type="password")
-            if st.form_submit_button("Anmelden", use_container_width=True):
-                try:
-                    res = requests.post(f"{API_URL}/login", data={"username": username, "password": password},
-                                        timeout=10)
-                    if res.status_code == 200:
-                        st.session_state.token = res.json()["access_token"]
-                        if api_get_me() is not None:
-                            st.rerun()
-                    elif res.status_code == 403:
-                        st.error("Konto nicht verifiziert.")
-                    else:
-                        st.error("Login fehlgeschlagen.")
-                except requests.RequestException:
-                    st.error("Backend nicht erreichbar.")
-    with col2:
-        if not st.session_state.verify_user:
-            st.subheader("Registrierung")
-            with st.form("register_form"):
-                reg_username = st.text_input("Neuer Nutzername")
-                reg_email = st.text_input("E-Mail")
-                reg_password = st.text_input("Neues Passwort", type="password")
-                if st.form_submit_button("Konto erstellen", use_container_width=True):
-                    try:
-                        res = requests.post(f"{API_URL}/register", json={"username": reg_username, "email": reg_email,
-                                                                         "password": reg_password}, timeout=10)
-                        if res.status_code == 200:
-                            st.session_state.verify_user = reg_username
-                            st.rerun()
-                        else:
-                            st.error(res.json().get("detail", "Fehler"))
-                    except requests.RequestException:
-                        st.error("Backend offline.")
-        else:
-            st.subheader("Konto verifizieren")
-            code = st.text_input("6-stelliger Code (siehe Backend-Terminal)")
-            if st.button("Verifizieren", use_container_width=True):
-                res = requests.post(f"{API_URL}/verify", json={"username": st.session_state.verify_user, "code": code})
-                if res.status_code == 200:
-                    st.session_state.verify_user = None
-                    st.success("Erfolgreich! Bitte einloggen.")
-                else:
-                    st.error("Code falsch.")
-
-# ------------------------------------------------------------
-# HAUPT-APP
-# ------------------------------------------------------------
-else:
-    me_response = api_get_me()
-    if me_response is None or me_response.status_code != 200: logout()
-
-    with st.sidebar:
-        st.success(f"Angemeldet als: **{me_response.json()['username']}**")
-        if st.button("🚪 Ausloggen", use_container_width=True): logout()
-        st.divider()
+    if not st.session_state.user_documents:
         st.warning(
-            "⚠️ **Wichtiger Hinweis**\nDie KI ersetzt keine rechtliche Beratung. Generierte Texte müssen geprüft werden.")
+            "Sie haben noch keine Unterlagen hochgeladen. Der Assistent kann Ihnen erst dann "
+            "richtig helfen. Wechseln Sie dazu in den Reiter **„Daten hochladen“**.",
+            icon="⚠️",
+        )
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📄 Dokumente", "💬 KI-Assistent", "📅 Fristen", "🖨️ PDF Export"])
+    st.markdown("**Was möchten Sie tun?** Wählen Sie eine Aufgabe oder schreiben Sie unten Ihre eigene Frage.")
 
-    # --- TAB 1: DOKUMENTE ---
-    with tab1:
-        st.subheader("Persönliche Dokumente hochladen")
-        uploaded_files = st.file_uploader("Bescheide, Gutachten, Pflegetagebücher als PDF", type="pdf",
-                                          accept_multiple_files=True)
-        if uploaded_files and st.button("🚀 Dokumente einlesen", type="primary"):
-            with st.spinner("Dokumente werden gelesen..."):
-                extracted_text, user_documents = extract_user_documents_from_pdfs(uploaded_files)
-                st.session_state.extracted_text = extracted_text
-                st.session_state.user_documents = user_documents
-                st.success(f"{len(user_documents)} Textabschnitte erstellt.")
+    aktion: Optional[str] = None
+    spalte1, spalte2 = st.columns(2, gap="small")
+    spalte3, spalte4 = st.columns(2, gap="small")
 
-    # --- TAB 2: CHAT (Überarbeitet für ChatGPT-Like Layout) ---
-    with tab2:
-        st.subheader("Pflegegrad-Widerspruchsassistent")
+    with spalte1:
+        if st.button("📖 Daten einlesen", use_container_width=True,
+                     help="Der Assistent verschafft sich einen Überblick über Ihre Unterlagen."):
+            aktion = pflege_rag.QUICK_ACTIONS["einlesen"]
+    with spalte2:
+        if st.button("🔍 Differenzanalyse", use_container_width=True,
+                     help="Vergleicht das Gutachten des Medizinischen Dienstes mit Ihren übrigen Unterlagen."):
+            aktion = pflege_rag.QUICK_ACTIONS["differenz"]
+    with spalte3:
+        if st.button("💬 Argumente sammeln", use_container_width=True,
+                     help="Sammelt begründete Argumente für Ihren Widerspruch."):
+            aktion = pflege_rag.QUICK_ACTIONS["argumente"]
+    with spalte4:
+        if st.button("✍️ Widerspruch schreiben", use_container_width=True,
+                     help="Verfasst die Begründung für Ihr Widerspruchsschreiben."):
+            aktion = pflege_rag.QUICK_ACTIONS["schreiben"]
 
-        if not st.session_state.user_documents:
-            st.info("💡 Bitte laden Sie im ersten Tab Ihre Dokumente hoch, damit der Assistent individuell helfen kann.")
+    verlauf = st.container(height=430, border=True)
+    with verlauf:
+        if not st.session_state.messages:
+            st.markdown(
+                "**Der Gesprächsverlauf erscheint hier.**  \n"
+                "Beginnen Sie mit einer der Aufgaben oben oder stellen Sie unten eine eigene Frage."
+            )
+        for nachricht in st.session_state.messages:
+            with st.chat_message(nachricht["role"], avatar="🧑" if nachricht["role"] == "user" else "⚖️"):
+                st.markdown(nachricht["content"])
 
-        # Vorgefertigte Buttons (Feature 2)
-        st.write("### Schnellauswahl")
-        col_btn1, col_btn2, col_btn3 = st.columns(3)
+    eingabe = st.chat_input("Schreiben Sie hier Ihre Frage …")
+    prompt = aktion or eingabe
 
-        if col_btn1.button("📊 Differenzanalyse"):
-            st.session_state.pending_prompt = "Führe eine detaillierte Differenzanalyse zwischen dem Gutachten des Medizinischen Dienstes (MD) und den eingereichten ärztlichen Unterlagen sowie dem Pflegetagebuch durch. Zeige alle Diskrepanzen auf."
+    if prompt:
+        with verlauf:
+            with st.chat_message("user", avatar="🧑"):
+                st.markdown(prompt)
+            st.session_state.messages.append({"role": "user", "content": prompt})
 
-        if col_btn2.button("📖 Dokumente einlesen & prüfen"):
-            st.session_state.pending_prompt = "Bitte lies alle hochgeladenen Nutzerdokumente gründlich. Fasse die wichtigsten pflegerelevanten Einschränkungen und Diagnosen kurz zusammen und bereite dich darauf vor, daraus Argumente abzuleiten."
+            with st.chat_message("assistant", avatar="⚖️"):
+                antwort = generate_answer(prompt)
 
-        if col_btn3.button("✍️ Widerspruchsgutachten schreiben"):
-            st.session_state.pending_prompt = "Verfasse nun ein vollständiges, formelles Widerspruchsschreiben. Nutze das gesamte RAG-Wissen, achte besonders auf die Struktur des hochgeladenen 'Musterbrief_Bescheid_der_Pflegekasse.pdf' und beziehe dich in der Begründung auf die Diskrepanzen in meinen Nutzerdokumenten."
+        if antwort:
+            st.session_state.messages.append({"role": "assistant", "content": antwort})
+            st.session_state.last_generated_letter = antwort
 
-        st.divider()
+    render_sources()
 
-        # Scrollbarer Container für den Nachrichtenverlauf (Feature 1)
-        chat_container = st.container(height=450)
+    if st.session_state.messages:
+        if st.button("🗑️ Gesprächsverlauf löschen",
+                     help="Löscht nur das Gespräch. Ihre Unterlagen bleiben erhalten."):
+            st.session_state.messages = []
+            st.session_state.last_user_sources = []
+            st.session_state.last_expert_sources = []
+            st.rerun()
 
-        with chat_container:
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
 
-        # Chat Input logic
-        user_input = st.chat_input("Deine Nachricht oder Frage eingeben...")
+def generate_answer(prompt: str) -> str:
+    """Sucht passende Textstellen und gibt die Antwort des Sprachmodells fortlaufend aus."""
+    try:
+        with st.spinner("Ihre Unterlagen werden durchsucht …"):
+            system_prompt, user_docs, expert_docs = pflege_rag.prepare_context(
+                get_expert_database(), get_user_store(), prompt
+            )
+        st.session_state.last_user_sources = pflege_rag.build_source_list(user_docs)
+        st.session_state.last_expert_sources = pflege_rag.build_source_list(expert_docs)
 
-        # Trigger either by manual input or predefined button
-        prompt_to_execute = st.session_state.pending_prompt if st.session_state.pending_prompt else user_input
+        nachrichten = pflege_rag.build_messages(system_prompt, st.session_state.messages)
+        return st.write_stream(pflege_rag.stream_answer(get_llm(), nachrichten))
+    except Exception:
+        st.error(
+            "**Die künstliche Intelligenz ist gerade nicht erreichbar.**\n\n"
+            "Bitte prüfen Sie, ob das Programm LM Studio läuft und das Sprachmodell geladen ist. "
+            "Versuchen Sie es danach noch einmal."
+        )
+        return ""
 
-        if prompt_to_execute:
-            st.session_state.pending_prompt = None  # Reset
 
-            # User Message anzeigen & speichern
-            st.session_state.messages.append({"role": "user", "content": prompt_to_execute})
-            with chat_container:
-                with st.chat_message("user"):
-                    st.markdown(prompt_to_execute)
+def render_sources() -> None:
+    if not (st.session_state.last_user_sources or st.session_state.last_expert_sources):
+        return
+    with st.expander("📚 Worauf sich die letzte Antwort stützt"):
+        if st.session_state.last_user_sources:
+            st.markdown("**Aus Ihren eigenen Unterlagen:**")
+            for quelle in st.session_state.last_user_sources:
+                st.markdown(f"- **{quelle['source']}**: {quelle['preview']}")
+        if st.session_state.last_expert_sources:
+            st.markdown("**Aus dem geprüften Fachwissen:**")
+            for quelle in st.session_state.last_expert_sources:
+                st.markdown(f"- **{quelle['source']}**: {quelle['preview']}")
 
-                with st.chat_message("assistant"):
-                    with st.spinner("KI generiert Antwort..."):
-                        expert_db = get_expert_database()
-                        answer, user_sources, expert_sources = generate_rag_answer(
-                            expert_db=expert_db,
-                            user_question=prompt_to_execute,
-                            user_documents=st.session_state.user_documents,
-                            chat_history=st.session_state.messages
-                        )
-                        st.markdown(answer)
 
-                        st.session_state.messages.append({"role": "assistant", "content": answer})
-                        st.session_state.last_user_sources = user_sources
-                        st.session_state.last_expert_sources = expert_sources
+# ---------------------------------------------------------------------------
+# REITER 3: PDF ERSTELLEN
+# ---------------------------------------------------------------------------
+def feld(label: str, key: str, hilfe: str = "", platzhalter: str = "") -> None:
+    """Eingabefeld, dessen Inhalt beim Zugangscode gespeichert wird.
 
-                        # Letzte KI Antwort merken, falls es wie ein Brief aussieht, fürs PDF
-                        st.session_state.last_generated_appeal = answer
+    Der Wert wird bewusst nur über `key` verwaltet (kein `value=`), damit ein
+    programmgesteuertes Vorbelegen zuverlässig wirkt.
+    """
+    st.text_input(
+        label,
+        key=f"w_{key}",
+        help=hilfe or None,
+        placeholder=platzhalter or None,
+    )
 
-        # Quellen unter dem Chat anzeigen
-        if st.session_state.last_user_sources or st.session_state.last_expert_sources:
-            with st.expander("📚 Verwendete Quellen für die letzte Antwort ansehen"):
-                if st.session_state.last_user_sources:
-                    st.write("**Eigene Dokumente:**")
-                    for s in st.session_state.last_user_sources:
-                        st.caption(f"- {s['source']}: {s['preview']}")
-                if st.session_state.last_expert_sources:
-                    st.write("**Fachwissen:**")
-                    for s in st.session_state.last_expert_sources:
-                        st.caption(f"- {s['source']}: {s['preview']}")
 
-    # --- TAB 3: FRISTEN ---
-    with tab3:
-        st.subheader("Fristenrechner")
-        received_date = st.date_input("Eingangsdatum des Bescheids", value=datetime.date.today())
-        deadline = received_date + datetime.timedelta(days=30)
-        st.info(f"Die grob berechnete Frist endet am **{deadline.strftime('%d.%m.%Y')}**.")
+def render_pdf_tab() -> None:
+    st.header("Widerspruch als PDF erstellen")
+    st.markdown(
+        "Hier entsteht Ihr fertiges Widerspruchsschreiben zum Ausdrucken und Unterschreiben. "
+        "Der Aufbau folgt dem Musterbrief der Verbraucherzentrale."
+    )
 
-    # --- TAB 4: PDF EXPORT (Feature 3) ---
-    with tab4:
-        st.subheader("Widerspruch als fertiges PDF exportieren")
-        st.write(
-            "Füllen Sie die fehlenden Daten aus, überprüfen Sie den von der KI verfassten Text und generieren Sie Ihr fertiges PDF zum Ausdrucken und Unterschreiben.")
+    st.markdown('<p><span class="schritt">1</span><strong>Ihre Angaben</strong></p>',
+                unsafe_allow_html=True)
+    links, rechts = st.columns(2, gap="large")
+    with links:
+        st.markdown("**Absender – Ihre Anschrift**")
+        feld("Ihr Vor- und Nachname", "absender_name", platzhalter="Michaela Muster")
+        feld("Ihre Straße und Hausnummer", "absender_strasse", platzhalter="Musterweg 1")
+        feld("Ihre Postleitzahl und Ihr Ort", "absender_plz_ort", platzhalter="99999 Musterstadt")
+        feld("Ort für die Datumszeile", "absender_ort",
+             hilfe="Erscheint oben rechts vor dem Datum. Kann leer bleiben.",
+             platzhalter="Musterstadt")
+    with rechts:
+        st.markdown("**Empfänger – Ihre Pflegekasse**")
+        # Die Bezeichnungen unterscheiden sich bewusst von denen des Absenders:
+        # Gleichlautende Feldbezeichnungen werden von Vorleseprogrammen nicht
+        # unterscheidbar angesagt.
+        feld("Name der Pflegekasse", "kasse_name",
+             platzhalter="Pflegekasse bei der Musterkrankenkasse")
+        feld("Straße und Hausnummer der Pflegekasse", "kasse_strasse")
+        feld("Postleitzahl und Ort der Pflegekasse", "kasse_plz_ort")
 
-        col_form1, col_form2 = st.columns(2)
+    st.markdown("**Angaben zum Bescheid**")
+    spalte1, spalte2, spalte3 = st.columns(3)
+    with spalte1:
+        feld("Datum des Bescheids", "bescheid_datum",
+             hilfe="Das Datum, das oben auf Ihrem Bescheid steht.", platzhalter="14.03.2026")
+    with spalte2:
+        feld("Aktenzeichen", "aktenzeichen",
+             hilfe="Steht meist oben auf dem Bescheid. Kann leer bleiben.")
+    with spalte3:
+        feld("Versichertennummer", "versichert_nr")
+    feld("Name der pflegebedürftigen Person", "versichert_name",
+         hilfe="Nur ausfüllen, wenn Sie den Widerspruch für eine andere Person stellen.")
 
-        with col_form1:
-            st.write("**Angaben zum Versicherten / Absender**")
-            absender_name = st.text_input("Vor- und Nachname (Absender)")
-            absender_adresse = st.text_input("Straße, Hausnummer, PLZ, Ort (Absender)")
-            versichert_name = st.text_input("Name der pflegebedürftigen Person (falls abweichend)",
-                                            help="Leer lassen, wenn Sie selbst betroffen sind.")
-            versichert_nr = st.text_input("Versichertennummer")
+    st.markdown("---")
+    st.markdown('<p><span class="schritt">2</span><strong>Begründung des Widerspruchs</strong></p>',
+                unsafe_allow_html=True)
 
-        with col_form2:
-            st.write("**Angaben zur Pflegekasse**")
-            kasse_name = st.text_input("Name der Pflegekasse", value="Pflegekasse bei der ...")
-            kasse_adresse = st.text_input("Straße, Hausnummer, PLZ, Ort (Pflegekasse)")
-            bescheid_datum = st.text_input("Datum des Ablehnungsbescheids", value="TT.MM.JJJJ")
+    if st.session_state.last_generated_letter:
+        if st.button("⬇️ Text aus dem KI-Gespräch übernehmen", type="secondary"):
+            set_field(
+                "letter_text",
+                pflege_pdf.prepare_begruendung(st.session_state.last_generated_letter),
+            )
+            st.rerun()
+    else:
+        st.info(
+            "Noch kein Text vorhanden. Nutzen Sie im Reiter **„KI-Assistent“** die Aufgabe "
+            "**„Widerspruch schreiben“**. Der Text erscheint dann hier zum Übernehmen.",
+            icon="💡",
+        )
 
-        # Fallback falls Namen identisch sind
-        if not versichert_name:
-            versichert_name = absender_name
+    st.text_area(
+        "Begründung (Sie können den Text hier frei bearbeiten)",
+        key="w_letter_text",
+        height=320,
+        help="Anrede, Betreff und Grußformel ergänzt die Vorlage automatisch. "
+             "Schreiben Sie hier nur die Begründung.",
+    )
 
-        st.write("**Widerspruchstext (Begründung)**")
-        st.caption(
-            "Sie können den Text hier noch manuell anpassen, bevor Sie das PDF generieren. Der Text wird automatisch mit der letzten Antwort der KI vorausgefüllt.")
+    # Sprachmodelle setzen Platzhalter ein, wenn ihnen eine Angabe fehlt. Ein
+    # Schreiben mit solchen Lücken darf nicht bei der Pflegekasse landen.
+    luecken = pflege_pdf.find_placeholders(get_field("letter_text"))
+    if luecken:
+        st.warning(
+            "**Im Text stehen noch Lücken, die Sie ausfüllen sollten.** Die künstliche "
+            "Intelligenz konnte diese Angaben nicht aus Ihren Unterlagen entnehmen:\n\n"
+            + "\n".join(f"- `{luecke}`" for luecke in luecken[:8])
+            + "\n\nBitte ersetzen Sie diese Stellen, bevor Sie das Schreiben abschicken.",
+            icon="✏️",
+        )
 
-        # Vorausfüllen mit der letzen KI Antwort
-        brief_text = st.text_area("Haupttext", value=st.session_state.last_generated_appeal, height=400)
+    begruendung_folgt = st.checkbox(
+        "Ich reiche die Begründung später nach (Widerspruch zunächst nur fristwahrend einlegen)",
+        help="Damit wird die Frist gewahrt. Im Schreiben steht dann, dass die Begründung in Kürze folgt.",
+    )
 
-        if st.button("📄 PDF Generieren", type="primary"):
-            if not absender_name or not kasse_name or not brief_text:
-                st.error("Bitte füllen Sie mindestens Name, Kasse und den Text aus.")
-            else:
-                try:
-                    pdf_bytes = generate_pdf_letter(
-                        absender_name=absender_name,
-                        absender_adresse=absender_adresse,
-                        kasse_name=kasse_name,
-                        kasse_adresse=kasse_adresse,
-                        versichert_name=versichert_name,
-                        versichert_nr=versichert_nr,
-                        bescheid_datum=bescheid_datum,
-                        brief_text=brief_text
-                    )
+    st.markdown("---")
+    st.markdown('<p><span class="schritt">3</span><strong>PDF erstellen und herunterladen</strong></p>',
+                unsafe_allow_html=True)
 
-                    st.success("PDF wurde erfolgreich generiert!")
-                    st.download_button(
-                        label="📥 PDF Herunterladen",
-                        data=pdf_bytes,
-                        file_name="Widerspruch_Pflegegrad.pdf",
-                        mime="application/pdf"
-                    )
-                except Exception as e:
-                    st.error(f"Fehler bei der PDF-Erstellung: {e}")
+    daten = pflege_pdf.LetterData(
+        absender_name=get_field("absender_name"),
+        absender_strasse=get_field("absender_strasse"),
+        absender_plz_ort=get_field("absender_plz_ort"),
+        kasse_name=get_field("kasse_name"),
+        kasse_strasse=get_field("kasse_strasse"),
+        kasse_plz_ort=get_field("kasse_plz_ort"),
+        versichert_name=get_field("versichert_name") or get_field("absender_name"),
+        versichert_nr=get_field("versichert_nr"),
+        aktenzeichen=get_field("aktenzeichen"),
+        bescheid_datum=get_field("bescheid_datum"),
+        begruendung=get_field("letter_text"),
+        begruendung_folgt=begruendung_folgt,
+        ort=get_field("absender_ort"),
+    )
+
+    fehlend = pflege_pdf.validate(daten)
+    if fehlend:
+        st.warning(
+            "Bitte ergänzen Sie noch folgende Angaben:\n\n"
+            + "\n".join(f"- {eintrag}" for eintrag in fehlend),
+            icon="⚠️",
+        )
+
+    if st.button("📄 PDF jetzt erstellen", type="primary", disabled=bool(fehlend)):
+        try:
+            st.session_state.pdf_bytes = pflege_pdf.build_letter_pdf(daten)
+            st.success("Ihr Widerspruchsschreiben wurde erstellt.", icon="✅")
+        except Exception:
+            st.session_state.pop("pdf_bytes", None)
+            st.error("Das PDF konnte nicht erstellt werden. Bitte prüfen Sie Ihre Eingaben.")
+
+    if st.session_state.get("pdf_bytes"):
+        st.download_button(
+            "⬇️ PDF herunterladen",
+            data=st.session_state.pdf_bytes,
+            file_name="Widerspruch_Pflegegrad.pdf",
+            mime="application/pdf",
+        )
+        st.info(
+            "**So geht es weiter:** Drucken Sie das Schreiben aus und **unterschreiben Sie es von Hand**. "
+            "Schicken Sie es per Post – am besten als Einwurfeinschreiben – oder per Fax an Ihre "
+            "Pflegekasse. Eine E-Mail wahrt die Frist nicht.",
+            icon="📮",
+        )
+
+
+# ---------------------------------------------------------------------------
+# REITER 4: EINSTELLUNGEN
+# ---------------------------------------------------------------------------
+def render_settings_tab() -> None:
+    st.header("Einstellungen")
+
+    st.subheader("🔑 Ihr Zugangscode")
+    st.markdown(
+        "Mit diesem Code arbeiten Sie später weiter. **Schreiben Sie ihn sich auf** und bewahren "
+        "Sie ihn sicher auf. Er kann nicht wiederhergestellt werden."
+    )
+    st.code(st.session_state.token, language=None)
+
+    ablauf = parse_datetime(st.session_state.expires_at)
+    if ablauf:
+        verbleibend = ablauf - utcnow()
+        tage = max(verbleibend.days, 0)
+        stunden = max(verbleibend.seconds // 3600, 0) if verbleibend.days >= 0 else 0
+        st.markdown(
+            f"### ⏳ Noch **{tage} Tage und {stunden} Stunden** gültig\n"
+            f"Ihre Sitzung wird am **{ablauf.strftime('%d.%m.%Y um %H:%M')} Uhr** automatisch "
+            "und vollständig gelöscht."
+        )
+        st.progress(min(max(tage / SESSION_DAYS, 0.0), 1.0))
+
+    if st.button("➕ Um 3 Tage verlängern", type="primary"):
+        antwort = api_extend_session(st.session_state.token)
+        if antwort is not None and antwort.status_code == 200:
+            st.session_state.expires_at = antwort.json()["expires_at"]
+            st.success("Ihre Sitzung wurde um 3 Tage verlängert.", icon="✅")
+            st.rerun()
+        else:
+            st.error("Die Verlängerung hat nicht geklappt. Bitte versuchen Sie es noch einmal.")
+
+    st.markdown("---")
+    st.subheader("👁️ Darstellung")
+    st.markdown("Passen Sie die Anzeige an Ihre Bedürfnisse an.")
+    spalte1, spalte2 = st.columns(2)
+    with spalte1:
+        auswahl = st.radio(
+            "Schriftgröße",
+            list(FONT_SCALES.keys()),
+            index=list(FONT_SCALES.keys()).index(st.session_state.font_scale),
+            horizontal=True,
+        )
+        if auswahl != st.session_state.font_scale:
+            st.session_state.font_scale = auswahl
+            st.rerun()
+    with spalte2:
+        kontrast = st.toggle(
+            "Hoher Kontrast",
+            value=st.session_state.high_contrast,
+            help="Verstärkt Schwarz-Weiß-Kontraste und Umrandungen.",
+        )
+        if kontrast != st.session_state.high_contrast:
+            st.session_state.high_contrast = kontrast
+            st.rerun()
+
+    st.markdown("---")
+    st.subheader("🗑️ Alles löschen und beenden")
+    st.markdown(
+        "Hiermit werden **sofort und unwiderruflich** gelöscht: Ihr Zugangscode, die Inhalte Ihrer "
+        "Unterlagen, Ihr Gesprächsverlauf und Ihr Schreiben. Danach ist ein Wiedereinstieg nicht "
+        "mehr möglich."
+    )
+    bestaetigt = st.checkbox("Ja, ich möchte wirklich alles endgültig löschen.")
+    if st.button("🗑️ Jetzt alles löschen und beenden", disabled=not bestaetigt):
+        erfolgreich = api_delete_session(st.session_state.token)
+        reset_local_state()
+        st.session_state.deletion_done = erfolgreich
+        st.rerun()
+
+    st.markdown("---")
+    st.subheader("🚪 Nur abmelden")
+    st.markdown(
+        "Sie schließen die Sitzung auf diesem Bildschirm. Ihre Daten bleiben gespeichert und Sie "
+        "können mit Ihrem Zugangscode jederzeit weiterarbeiten."
+    )
+    if st.button("🚪 Abmelden"):
+        reset_local_state()
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# HAUPTANSICHT
+# ---------------------------------------------------------------------------
+def render_app() -> None:
+    kopf_links, kopf_rechts = st.columns([3, 1])
+    with kopf_links:
+        st.title("⚖️ Pflegehilfe Online")
+    with kopf_rechts:
+        ablauf = parse_datetime(st.session_state.expires_at)
+        if ablauf:
+            tage = max((ablauf - utcnow()).days, 0)
+            st.markdown(
+                "<div class='karte' style='text-align:center;padding:0.8rem'>"
+                f"<strong>Sitzung aktiv</strong><br>noch {tage} Tage gültig</div>",
+                unsafe_allow_html=True,
+            )
+
+    if not st.session_state.user_documents:
+        st.info(
+            "**So gehen Sie vor:** 1. Unterlagen hochladen → 2. mit dem KI-Assistenten prüfen → "
+            "3. Widerspruch als PDF erstellen.",
+            icon="🧭",
+        )
+
+    reiter = st.tabs([
+        "📁  Daten hochladen",
+        "💬  KI-Assistent",
+        "📄  PDF erstellen",
+        "⚙️  Einstellungen",
+    ])
+    with reiter[0]:
+        render_upload_tab()
+    with reiter[1]:
+        render_chat_tab()
+    with reiter[2]:
+        render_pdf_tab()
+    with reiter[3]:
+        render_settings_tab()
+
+    st.markdown("---")
+    st.caption(
+        "Diese Anwendung ersetzt keine Rechtsberatung. Alle von der künstlichen Intelligenz "
+        "erstellten Texte müssen vor dem Absenden geprüft werden. Ihre Daten werden "
+        "ausschließlich örtlich verarbeitet."
+    )
+
+
+def main() -> None:
+    init_state()
+    inject_css()
+
+    if st.session_state.pop("deletion_done", None) is not None:
+        st.success(
+            "**Alle Ihre Daten wurden vollständig gelöscht.** Vielen Dank für Ihr Vertrauen.",
+            icon="✅",
+        )
+
+    if st.session_state.token is None:
+        render_start_page()
+    else:
+        render_app()
+        sync_session()
+
+
+main()

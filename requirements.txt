@@ -4,11 +4,8 @@ pypdf
 fastapi
 uvicorn
 sqlalchemy
-bcrypt
-python-jose
-python-multipart
+cryptography
 pydantic
-email-validator
 python-dotenv
 
 langchain

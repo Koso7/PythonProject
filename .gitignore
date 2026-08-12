@@ -1,2 +1,27 @@
-pflege_sicher.db
+# Zugangsdaten und Schlüssel - dürfen niemals ins Repository
 .env
+
+# Sitzungsdatenbank mit verschlüsselten Nutzerdaten
+pflege_sicher.db
+
+# Erzeugte Vektordatenbank (wird mit ingest.py neu aufgebaut)
+qdrant_db/
+chroma_db/
+
+# Python-Zwischendateien
+__pycache__/
+*.pyc
+*.pyo
+
+# Erzeugte Widerspruchsschreiben und Datenbankauszüge
+Widerspruch_*.pdf
+datenbank_dump.txt
+
+# Virtuelle Umgebung
+.venv/
+
+# Pflegeunterlagen einzelner Personen gehören NICHT in ein öffentliches
+# Repository. Neue Dateien in daten/ müssen bewusst und einzeln hinzugefügt
+# werden (git add -f), nachdem geprüft wurde, dass sie keine
+# personenbezogenen Gesundheitsdaten enthalten.
+daten/
