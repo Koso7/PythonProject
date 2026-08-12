@@ -25,3 +25,6 @@ datenbank_dump.txt
 # werden (git add -f), nachdem geprüft wurde, dass sie keine
 # personenbezogenen Gesundheitsdaten enthalten.
 daten/
+
+# Lokal erzeugte ONNX-Modelle fuer den Betrieb auf der Grafikkarte (mehrere GB)
+modelle/

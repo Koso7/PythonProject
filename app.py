@@ -879,7 +879,7 @@ def generate_answer(suchfrage: str, anweisung: str, zusatzfragen=()) -> tuple[st
     ausführliche Auftrag an das Sprachmodell.
     """
     try:
-        with st.spinner("Der Assistent wird vorbereitet (einmalig, dauert etwa 20 Sekunden) …"):
+        with st.spinner("Der Assistent wird vorbereitet (nur beim ersten Mal) …"):
             reranker = get_reranker()
 
         with st.spinner("Ihre Unterlagen und das Fachwissen werden durchsucht …"):
@@ -1122,6 +1122,14 @@ def render_settings_tab() -> None:
         if kontrast != st.session_state.high_contrast:
             st.session_state.high_contrast = kontrast
             st.rerun()
+
+    st.divider()
+    st.subheader("⚙️ Technische Angaben")
+    st.caption(
+        f"Neubewertung der Suchtreffer läuft auf: **{pflege_rag.reranker_backend()}**. "
+        "Sprachmodell und Einbettungen laufen über LM Studio. Alle Verarbeitung findet "
+        "ausschließlich auf diesem Rechner statt."
+    )
 
     st.divider()
     st.subheader("🚪 Sitzung verlassen")
