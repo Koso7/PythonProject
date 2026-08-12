@@ -170,7 +170,7 @@ def generate_pdf_letter(absender_name, absender_adresse, kasse_name, kasse_adres
     pdf.cell(0, 5, text="__________________________________________________", new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 5, text=f"(Unterschrift {absender_name})", new_x="LMARGIN", new_y="NEXT")
 
-    return pdf.output()
+    return bytes(pdf.output())
 
 
 # ------------------------------------------------------------
