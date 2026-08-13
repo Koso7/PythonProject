@@ -802,9 +802,28 @@ class RetrievalResult:
         return self.beste_bewertung >= STRONG_EVIDENCE_SCORE
 
 
-# Zusatzfragen, die bei einer Differenzanalyse mitgesucht werden. So kommen
+# Zusatzfragen, die bei einer modulweisen Analyse mitgesucht werden. So kommen
 # Belege zu allen sechs Modulen in den Kontext, nicht nur zum erstbesten.
-MODULE_QUERIES = [f"Modul {nummer} {name}" for nummer, name in MODULE_NAMES.items()]
+#
+# Wichtig sind die Bewertungsbegriffe: Sucht man bloß nach dem Modulnamen,
+# liefert die Suche allgemeine Beschreibungen ("In diesem Modul geht es um …").
+# Für einen Widerspruch braucht es dagegen die Bewertungsstufen und Kriterien,
+# an denen sich belegen lässt, welche Einstufung angezeigt wäre.
+_BEWERTUNGSBEGRIFFE = (
+    "Bewertung Kriterien Punkte selbständig überwiegend selbständig "
+    "überwiegend unselbständig unselbständig Einzelpunkte"
+)
+MODULE_QUERIES = [
+    f"Modul {nummer} {name} {_BEWERTUNGSBEGRIFFE}" for nummer, name in MODULE_NAMES.items()
+]
+
+# Regeln, die bei jeder modulweisen Analyse gebraucht werden: Schwellenwerte
+# der Pflegegrade und die Gewichtung der Module.
+BEWERTUNGS_QUERIES = (
+    "Gesamtpunktzahl Schwellenwerte Pflegegrad 1 2 3 4 5 gewichtete Punkte Punktebereiche",
+    "Gewichtung der Module Prozent Punktbereiche Ermittlung des Pflegegrades",
+    "alle sechs Module müssen begutachtet werden Vollständigkeit der Begutachtung",
+)
 
 
 def select_per_query(
@@ -883,6 +902,10 @@ def prepare_context(
 
     # Die Suche im Fachwissen wird um die zentralen Begriffe des Themas ergänzt.
     fach_fragen = [*fragen, f"{question} Pflegegrad Begutachtung Widerspruch Module Punkte"]
+    if extra_queries:
+        # Bei modulweisen Aufgaben zusätzlich die Bewertungsregeln beschaffen:
+        # Schwellenwerte, Gewichtung und die Pflicht zur vollständigen Begutachtung.
+        fach_fragen = [*fach_fragen, *BEWERTUNGS_QUERIES]
     if expert_index is None:
         fach_bewertet: List[Tuple[Document, float]] = []
     elif extra_queries:
@@ -1007,6 +1030,70 @@ def stream_answer(llm, messages: Sequence[dict]) -> Iterator[str]:
 # ---------------------------------------------------------------------------
 # SCHNELLAKTIONEN IM CHAT
 # ---------------------------------------------------------------------------
+SELBST = "selbst"
+ANGEHOERIGE = "angehoerige"
+
+
+@dataclass
+class Antragsteller:
+    """Wer den Widerspruch einlegt - das bestimmt die Perspektive des Textes.
+
+    Legt die betroffene Person selbst Widerspruch ein, wird in der Ich-Form
+    geschrieben. Tut es eine angehörige Person, wird über die betroffene Person
+    in der dritten Person geschrieben ("meine Mutter, Frau Müller").
+    """
+
+    perspektive: str = SELBST
+    versicherte_name: str = ""
+    verhaeltnis: str = ""  # etwa "Tochter", "Sohn", "Ehefrau", "Bevollmächtigter"
+
+    @property
+    def schreibt_selbst(self) -> bool:
+        return self.perspektive != ANGEHOERIGE
+
+    @property
+    def anrede_versicherte(self) -> str:
+        """Wie die betroffene Person im Brief benannt wird."""
+        if self.schreibt_selbst:
+            return "ich"
+        name = self.versicherte_name.strip()
+        if self.verhaeltnis.strip() and name:
+            return f"meine {self.verhaeltnis.strip()}, {name}"
+        return name or "die versicherte Person"
+
+    def prompt_hinweis(self) -> str:
+        """Anweisung an das Sprachmodell zur richtigen Perspektive."""
+        if self.schreibt_selbst:
+            return (
+                "PERSPEKTIVE: Die betroffene Person schreibt selbst. Formuliere durchgehend in der "
+                "Ich-Form ('ich benötige Unterstützung', 'bei mir wurde festgestellt'). "
+                "Sprich niemals von 'der Patientin', 'der Versicherten' oder 'der Mandantin'."
+            )
+        bezeichnung = self.anrede_versicherte
+        name = self.versicherte_name.strip() or "die versicherte Person"
+        return (
+            f"PERSPEKTIVE: Der Widerspruch wird für eine andere Person eingelegt. Der Schreiber ist "
+            f"angehörig; die betroffene Person ist {bezeichnung}. Schreibe über sie in der dritten "
+            f"Person ('{name} benötigt Unterstützung', 'bei ihr wurde festgestellt') und über dich "
+            f"selbst in der Ich-Form ('ich habe beobachtet', 'ich übernehme die Pflege'). "
+            f"Sprich niemals von 'der Patientin', 'der Mandantin' oder 'der Versicherten' – "
+            f"verwende den Namen oder das Verwandtschaftsverhältnis."
+        )
+
+
+# Ohne diese Auflage stützt sich das Sprachmodell allein auf die Unterlagen der
+# ratsuchenden Person und lässt die geprüfte Wissensbasis ungenutzt. Im Test
+# wurde bei allen vier Aufgaben keine einzige Fachquelle zitiert.
+FACHWISSEN_AUFLAGE = (
+    "\n\nFACHLICHE GRUNDLAGE – verbindlich:\n"
+    "- Ziehe zu jedem Punkt die Abschnitte aus dem geprüften Fachwissen heran (Begutachtungs-"
+    "Richtlinien, SGB XI, amtliche Ratgeber) und belege damit, welche Bewertung nach den dort "
+    "genannten Kriterien angezeigt wäre.\n"
+    "- Benenne, welches Kriterium der Begutachtungs-Richtlinien einschlägig ist, wenn du es findest.\n"
+    "- Findest du zu einem Punkt keine passende Fachstelle, sage das offen, statt sie zu erfinden."
+)
+
+
 @dataclass(frozen=True)
 class QuickAction:
     """Eine vorbereitete Aufgabe im Chat.
@@ -1022,6 +1109,14 @@ class QuickAction:
     nutzertext: str
     prompt: str
     zusatzfragen: Tuple[str, ...] = ()
+    braucht_perspektive: bool = False
+
+    def render(self, antragsteller: Optional[Antragsteller] = None) -> str:
+        """Setzt die Perspektive in den Auftrag ein."""
+        if not self.braucht_perspektive:
+            return self.prompt
+        person = antragsteller or Antragsteller()
+        return f"{person.prompt_hinweis()}\n\n{self.prompt}"
 
 
 QUICK_ACTIONS: Tuple[QuickAction, ...] = (
@@ -1037,8 +1132,12 @@ QUICK_ACTIONS: Tuple[QuickAction, ...] = (
             "2. **Ergebnis der Begutachtung** – welcher Pflegegrad wurde festgestellt, mit wie vielen Punkten, "
             "und wie verteilen sich die Punkte auf die sechs Module?\n"
             "3. **Dokumentierte Einschränkungen und Diagnosen** – geordnet nach den sechs Modulen.\n"
-            "4. **Erste Auffälligkeiten** – wo wirkt die Bewertung auf den ersten Blick zu niedrig?\n\n"
-            "Belege jede Angabe mit der Abschnittsnummer. Wenn eine der vier Angaben in meinen Unterlagen "
+            "4. **Erste Auffälligkeiten** – wo wirkt die Bewertung auf den ersten Blick zu niedrig? "
+            "Nenne dabei die Punktegrenzen der Pflegegrade aus dem Fachwissen, damit erkennbar wird, "
+            "wie weit der festgestellte Wert vom nächsthöheren Pflegegrad entfernt liegt.\n"
+            "5. **Nicht bewertete Module** – prüfe ausdrücklich, ob das Gutachten zu einem der sechs "
+            "Module gar keine Bewertung enthält, obwohl die übrigen Unterlagen dazu etwas hergeben.\n\n"
+            "Belege jede Angabe mit der Abschnittsnummer. Wenn eine der Angaben in meinen Unterlagen "
             "fehlt, schreibe das ausdrücklich hin, statt sie zu ergänzen."
         ),
     ),
@@ -1062,8 +1161,10 @@ QUICK_ACTIONS: Tuple[QuickAction, ...] = (
             "und gehe weiter. Erfinde weder Feststellungen noch Punktzahlen.\n"
             "- Schließe mit einer Einschätzung, bei welchen Modulen ein Widerspruch am aussichtsreichsten "
             "ist, und nenne, welche Nachweise dafür noch fehlen."
+            + FACHWISSEN_AUFLAGE
         ),
         zusatzfragen=tuple(MODULE_QUERIES),
+        braucht_perspektive=True,
     ),
     QuickAction(
         schluessel="argumente",
@@ -1081,8 +1182,10 @@ QUICK_ACTIONS: Tuple[QuickAction, ...] = (
             "Sortiere nach Erfolgsaussicht, das stärkste Argument zuerst. Nimm nur Argumente auf, die du "
             "tatsächlich mit einem Abschnitt belegen kannst. Nenne am Ende, welche Nachweise mir noch fehlen "
             "und welche ich nachreichen sollte."
+            + FACHWISSEN_AUFLAGE
         ),
         zusatzfragen=tuple(MODULE_QUERIES),
+        braucht_perspektive=True,
     ),
     QuickAction(
         schluessel="schreiben",
@@ -1090,23 +1193,36 @@ QUICK_ACTIONS: Tuple[QuickAction, ...] = (
         beschreibung="Verfasst die Begründung für das Widerspruchsschreiben, fertig zur Übernahme in das PDF.",
         nutzertext="Bitte verfasse die Begründung für mein Widerspruchsschreiben.",
         prompt=(
-            "Verfasse die Begründung für mein Widerspruchsschreiben an die Pflegekasse.\n\n"
-            "Aufbau:\n"
-            "- Ein einleitender Satz, gegen welche Feststellung sich der Widerspruch richtet.\n"
-            "- Danach je ein Absatz pro strittigem Modul: Was hat der Medizinische Dienst festgestellt, "
-            "was belegen meine Unterlagen, welche höhere Bewertung ist daher angezeigt.\n"
-            "- Ein Schlussabsatz mit der Bitte um erneute Begutachtung.\n\n"
+            "Verfasse den Text eines Widerspruchsschreibens an die Pflegekasse. Es soll sich lesen wie "
+            "ein Brief, den ein Mensch geschrieben hat – nicht wie eine Aufzählung von Argumenten.\n\n"
+            "Aufbau in ausformulierten Absätzen:\n"
+            "1. **Einleitung (2–3 Sätze):** Nenne den Bescheid mit Datum und die getroffene Einstufung. "
+            "Sage, dass dieser Einstufung widersprochen wird, und in einem Satz warum – weil der "
+            "tatsächliche Hilfebedarf nicht zutreffend erfasst wurde.\n"
+            "2. **Hauptteil:** Für jeden strittigen Punkt ein eigener, zusammenhängender Absatz in ganzen "
+            "Sätzen. Beschreibe darin nacheinander: was der Medizinische Dienst festgestellt hat, wie sich "
+            "die Lage nach den vorliegenden Unterlagen tatsächlich darstellt, und welche Bewertung nach den "
+            "Begutachtungs-Richtlinien daher angezeigt wäre. Führe konkrete Beobachtungen aus den Unterlagen "
+            "an (Beispiele, Häufigkeiten, Uhrzeiten), damit die Schilderung nachvollziehbar wird. "
+            "Verwende KEINE Zwischenüberschriften, KEINE Aufzählungszeichen und KEINE Spiegelstriche.\n"
+            "3. **Wurde ein Modul gar nicht bewertet**, obwohl die Unterlagen dazu etwas hergeben, weise "
+            "in einem eigenen Absatz ausdrücklich darauf hin – das ist häufig der stärkste Punkt.\n"
+            "4. **Schluss (2–3 Sätze):** Bitte um erneute Begutachtung, möglichst unter Einbeziehung der "
+            "beigefügten Unterlagen, und um eine Mitteilung über das weitere Vorgehen.\n\n"
             "Zwingende Vorgaben:\n"
-            "- Schreibe NUR den Begründungstext. Keine Anrede, keine Grußformel, kein Betreff, "
-            "keine Absenderangaben, keine Unterschrift – die ergänzt die Briefvorlage automatisch.\n"
-            "- Schreibe in ganzen Sätzen, sachlich und höflich, in der Ich-Form.\n"
-            "- Verwende KEINE Belegnummern und KEINE eckigen Klammern im Brieftext. Der Brief geht an eine "
-            "Behörde und muss ohne Fußnoten lesbar sein.\n"
-            "- Setze KEINE Platzhalter ein. Wenn dir eine Zahl fehlt, formuliere den Satz ohne sie.\n"
-            "- Behandle nur Module, zu denen du echte Belege hast. Erwähne fehlende Module gar nicht.\n"
-            "- Schreibe nichts über Rechtsberatung, über künstliche Intelligenz oder Empfehlungen an mich."
+            "- Schreibe NUR den Fließtext ab der Einleitung. Keine Anrede, keine Grußformel, kein Betreff, "
+            "keine Absenderangaben, keine Unterschrift – das ergänzt die Briefvorlage automatisch.\n"
+            "- Sachlicher, höflicher Behördenton. Keine Vorwürfe, keine Ausrufezeichen.\n"
+            "- Verwende KEINE Belegnummern und KEINE eckigen Klammern. Der Brief muss ohne Fußnoten lesbar sein.\n"
+            "- Setze KEINE Platzhalter ein. Fehlt dir eine Zahl, formuliere den Satz ohne sie.\n"
+            "- Behandle nur Punkte, zu denen du echte Belege hast. Erfinde nichts.\n"
+            "- Schreibe nichts über Rechtsberatung, über künstliche Intelligenz oder Empfehlungen.\n"
+            "- Stütze die Bewertung, die du für angezeigt hältst, auf die Kriterien der "
+            "Begutachtungs-Richtlinien aus dem Fachwissen. Nenne sie im Fließtext, ohne Belegnummern "
+            "(etwa: „nach den Begutachtungs-Richtlinien ist hier ... zu bewerten“)."
         ),
         zusatzfragen=tuple(MODULE_QUERIES),
+        braucht_perspektive=True,
     ),
 )
 
