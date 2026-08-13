@@ -8,10 +8,10 @@
       "port": 8000
     },
     {
-      "name": "app",
-      "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.port", "8501", "--server.headless", "true"],
-      "port": 8501
+      "name": "frontend",
+      "runtimeExecutable": "npm.cmd",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
+      "port": 5173
     }
   ]
 }

@@ -9,7 +9,15 @@
 # Zustand: docker compose ps
 services:
   qdrant:
-    image: qdrant/qdrant:v1.12.4
+    # Die Fassung muss zur Client-Bibliothek passen (qdrant-client 1.18),
+    # sonst warnt der Client bei jeder Anfrage vor Unverträglichkeit.
+    #
+    # ACHTUNG bei einem Wechsel der Fassung: Qdrant kann Daten älterer
+    # Fassungen nicht immer lesen (der Dienst startet dann in einer
+    # Endlosschleife neu). In dem Fall den Speicher verwerfen und die
+    # Wissensdatenbank neu aufbauen:
+    #     docker compose down -v && docker compose up -d && python ingest.py
+    image: qdrant/qdrant:v1.18.1
     container_name: pflege-qdrant
     restart: unless-stopped
     ports:

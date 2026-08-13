@@ -439,6 +439,24 @@ def qdrant_betriebsart() -> str:
     return f"Dienst ({QDRANT_URL})" if QDRANT_URL else f"eingebettet ({QDRANT_DIR})"
 
 
+def build_user_vector_store(documents: List[Document], embeddings) -> Optional[QdrantVectorStore]:
+    """Legt einen Suchindex für die Unterlagen einer Sitzung an.
+
+    Ausschließlich im Arbeitsspeicher (``:memory:``): Die Inhalte der
+    hochgeladenen Unterlagen werden dadurch nie unverschlüsselt auf die
+    Festplatte geschrieben - anders als die Wissensdatenbank, die nur
+    öffentliche Fachtexte enthält.
+    """
+    if not documents:
+        return None
+    return QdrantVectorStore.from_documents(
+        documents=list(documents),
+        embedding=embeddings,
+        location=":memory:",
+        collection_name="nutzerdokumente",
+    )
+
+
 def open_expert_database(embeddings) -> QdrantVectorStore:
     return QdrantVectorStore(
         client=create_qdrant_client(), collection_name=COLLECTION_NAME, embedding=embeddings

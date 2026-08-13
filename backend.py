@@ -29,13 +29,14 @@ from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, DateTime, LargeBinary, String, create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession, declarative_base, sessionmaker
 
+import pflege_pdf
 import pflege_rag
 import pflege_service
 
@@ -190,6 +191,36 @@ class StatusResponse(BaseModel):
     sprachmodell: str
 
 
+class LetterRequest(BaseModel):
+    """Alle Angaben für das Widerspruchsschreiben."""
+
+    absender_name: str = ""
+    absender_strasse: str = ""
+    absender_plz_ort: str = ""
+    ort: str = ""
+    kasse_name: str = ""
+    kasse_strasse: str = ""
+    kasse_plz_ort: str = ""
+    versichert_name: str = ""
+    versichert_nr: str = ""
+    aktenzeichen: str = ""
+    bescheid_datum: str = ""
+    begruendung: str = ""
+    begruendung_folgt: bool = False
+    perspektive: str = "selbst"
+    verhaeltnis: str = ""
+
+
+class LetterCheckResponse(BaseModel):
+    fehlende_angaben: List[str]
+    offene_platzhalter: List[str]
+
+
+def _brief_daten(angaben: LetterRequest) -> "pflege_pdf.LetterData":
+    """Übersetzt die Anfrage in die Briefvorlage."""
+    return pflege_pdf.LetterData(**angaben.model_dump())
+
+
 # ------------------------------------------------------------
 # APP
 # ------------------------------------------------------------
@@ -227,10 +258,12 @@ app = FastAPI(title="Pflege-Assistent Session-API", version="2.0.0", lifespan=li
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN, "http://127.0.0.1:8501"],
+    allow_origins=[FRONTEND_ORIGIN, "http://127.0.0.1:8501",
+                   "http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type"],
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -460,6 +493,44 @@ def status():
         vektordatenbank=pflege_rag.qdrant_betriebsart(),
         neubewertung=pflege_rag.reranker_backend(),
         sprachmodell=pflege_rag.LLM_MODEL,
+    )
+
+
+@app.post("/session/{token}/letter/validate", response_model=LetterCheckResponse)
+def validate_letter(token: str, angaben: LetterRequest, db: DbSession = Depends(get_db)):
+    """Prüft die Briefangaben, ohne das PDF zu erzeugen.
+
+    So kann die Oberfläche schon beim Ausfüllen zeigen, was noch fehlt,
+    statt erst beim Erzeugen abzubrechen.
+    """
+    _get_valid_record(db, token)
+    daten = _brief_daten(angaben)
+    return LetterCheckResponse(
+        fehlende_angaben=pflege_pdf.validate(daten),
+        offene_platzhalter=pflege_pdf.find_placeholders(daten.begruendung),
+    )
+
+
+@app.post("/session/{token}/letter")
+def build_letter(token: str, angaben: LetterRequest, db: DbSession = Depends(get_db)):
+    """Erzeugt das Widerspruchsschreiben als PDF."""
+    record = _get_valid_record(db, token)
+    daten = _brief_daten(angaben)
+    fehlend = pflege_pdf.validate(daten)
+    if fehlend:
+        raise HTTPException(status_code=400, detail="; ".join(fehlend))
+
+    # Die Angaben mitspeichern, damit sie beim Wiedereinstieg wieder da sind.
+    stand = _decrypt(record.data_encrypted)
+    stand["brief"] = angaben.model_dump()
+    record.data_encrypted = _encrypt(stand)
+    record.last_accessed_at = utcnow()
+    db.commit()
+
+    return Response(
+        content=pflege_pdf.build_letter_pdf(daten),
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="Widerspruch_Pflegegrad.pdf"'},
     )
 
 

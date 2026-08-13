@@ -1,0 +1,307 @@
+/*
+ * Gestaltung der Oberfläche.
+ *
+ * Die Werte sind aus der geprüften Vorgängerfassung übernommen und dort
+ * gemessen worden: Fließtext 16,5:1 Kontrast, Schaltflächen 9,6:1 und 56 px
+ * hoch. WCAG AAA verlangt 7:1, das Mindestmaß für Klickflächen sind 44 px.
+ */
+
+:root {
+  --text: #16202a;
+  --gedaempft: #41525f;
+  --panel: #f1f4f7;
+  --rand: #c6d2dc;
+  --primaer: #1b4965;
+  --primaer-hell: #2a6d94;
+  --erfolg: #1b5e20;
+  --warnung: #8b4000;
+  --fehler: #a81c1c;
+  --grund: 18px;
+}
+
+/* Hoher Kontrast: reines Schwarz, kräftigere Umrandungen. */
+:root[data-kontrast="hoch"] {
+  --text: #000000;
+  --gedaempft: #000000;
+  --panel: #ffffff;
+  --rand: #000000;
+  --primaer: #00293d;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: var(--grund);
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+/* Tastaturbedienung muss jederzeit klar erkennbar sein. */
+*:focus-visible {
+  outline: 3px solid var(--primaer);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+h1 { font-size: 2rem; line-height: 1.25; margin: 0 0 0.4em; }
+h2 { font-size: 1.5rem; margin: 0 0 0.5em; }
+h3 { font-size: 1.2rem; margin: 0 0 0.4em; }
+p  { margin: 0 0 0.8em; }
+
+a { color: var(--primaer); }
+
+.huelle {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 1.6rem 1.2rem 3rem;
+}
+
+/* --- Kopfzeile mit Systemzustand --------------------------------------- */
+.kopf {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  border-bottom: 2px solid var(--rand);
+  padding-bottom: 0.8rem;
+  margin-bottom: 1rem;
+}
+.kopf-titel {
+  font-size: 1.55rem;
+  font-weight: 700;
+  color: var(--primaer);
+  margin: 0;
+}
+.plaketten { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.plakette {
+  background: var(--panel);
+  border: 1px solid var(--rand);
+  border-radius: 999px;
+  padding: 0.3rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.plakette.aktiv { border-color: var(--erfolg); color: var(--erfolg); }
+.plakette.offen { border-color: var(--warnung); color: var(--warnung); }
+
+/* --- Fortschritt über die drei Arbeitsschritte -------------------------- */
+.schritte { display: flex; gap: 0.5rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
+.schritt {
+  flex: 1 1 200px;
+  background: var(--panel);
+  border: 2px solid var(--rand);
+  border-left: 6px solid var(--rand);
+  border-radius: 8px;
+  padding: 0.65rem 0.9rem;
+}
+.schritt.fertig { border-left-color: var(--erfolg); }
+.schritt.laufend { border-left-color: var(--primaer); background: #ffffff; }
+.schritt-kopf {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--gedaempft);
+  letter-spacing: 0.03em;
+}
+.schritt-text { font-weight: 600; }
+.schritt-status { font-size: 0.82rem; color: var(--gedaempft); }
+.schritt.fertig .schritt-status { color: var(--erfolg); font-weight: 600; }
+
+/* --- Reiter ------------------------------------------------------------- */
+.reiter {
+  display: flex;
+  gap: 0.35rem;
+  border-bottom: 2px solid var(--rand);
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.reiter button {
+  background: none;
+  border: none;
+  border-bottom: 4px solid transparent;
+  padding: 0.85rem 1.1rem;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: var(--gedaempft);
+  cursor: pointer;
+  font-family: inherit;
+}
+.reiter button[aria-selected="true"] {
+  color: var(--primaer);
+  border-bottom-color: var(--primaer);
+}
+.reiter button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* --- Schaltflächen ------------------------------------------------------ */
+button.knopf {
+  min-height: 3.1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: inherit;
+  border-radius: 8px;
+  border: 2px solid var(--primaer);
+  padding: 0.5rem 1.1rem;
+  background: #ffffff;
+  color: var(--primaer);
+  cursor: pointer;
+}
+button.knopf.haupt { background: var(--primaer); color: #ffffff; }
+button.knopf:hover:not(:disabled) { background: var(--primaer-hell); color: #ffffff; }
+button.knopf:disabled { opacity: 0.5; cursor: not-allowed; border-color: var(--gedaempft); }
+button.knopf.gefahr { border-color: var(--fehler); color: var(--fehler); }
+button.knopf.gefahr:hover:not(:disabled) { background: var(--fehler); color: #ffffff; }
+
+/* --- Formulare ---------------------------------------------------------- */
+label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+input[type="text"],
+input[type="password"],
+textarea,
+select {
+  width: 100%;
+  font-family: inherit;
+  font-size: 1rem;
+  color: var(--text);
+  border: 2px solid var(--rand);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  background: #ffffff;
+}
+input:focus, textarea:focus, select:focus { border-color: var(--primaer); }
+.feld { margin-bottom: 1rem; }
+.feld .hilfe { font-size: 0.85rem; color: var(--gedaempft); margin-top: 0.2rem; }
+.raster { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 1.2rem; }
+
+/* --- Karten und Hinweise ------------------------------------------------ */
+.karte {
+  background: var(--panel);
+  border: 1px solid var(--rand);
+  border-radius: 10px;
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+.hinweis {
+  border-radius: 8px;
+  border: 1px solid var(--rand);
+  border-left: 6px solid var(--primaer);
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--panel);
+}
+.hinweis.erfolg { border-left-color: var(--erfolg); }
+.hinweis.warnung { border-left-color: var(--warnung); }
+.hinweis.fehler { border-left-color: var(--fehler); }
+.hinweis p:last-child { margin-bottom: 0; }
+
+/* --- Chat --------------------------------------------------------------- */
+.aufgaben { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.6rem; margin-bottom: 1.2rem; }
+.verlauf {
+  height: 26rem;
+  overflow-y: auto;
+  border: 1px solid var(--rand);
+  border-radius: 10px;
+  padding: 1rem;
+  background: #ffffff;
+  margin-bottom: 1rem;
+}
+.blase {
+  border-radius: 12px;
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 0.8rem;
+  border: 1px solid var(--rand);
+  background: var(--panel);
+}
+.blase.nutzer { background: #ffffff; }
+.blase-kopf { font-size: 0.8rem; font-weight: 700; color: var(--gedaempft); margin-bottom: 0.3rem; }
+.blase p:last-child { margin-bottom: 0; }
+.eingabezeile { display: flex; gap: 0.6rem; align-items: flex-start; }
+.eingabezeile textarea { resize: vertical; min-height: 3.1rem; }
+
+/* --- Quellen ------------------------------------------------------------ */
+.quelle {
+  border-left: 4px solid var(--primaer);
+  background: var(--panel);
+  border-radius: 6px;
+  padding: 0.7rem 0.95rem;
+  margin-bottom: 0.7rem;
+}
+.quelle-art {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gedaempft);
+  font-weight: 700;
+}
+.quelle-kopf { font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
+.ziffer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  background: var(--primaer);
+  color: #ffffff;
+  border-radius: 50%;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.quelle-text { font-size: 0.94rem; margin-top: 0.35rem; }
+
+details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.6rem 0;
+}
+
+.zugangscode {
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 1.05rem;
+  background: var(--panel);
+  border: 1px solid var(--rand);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  word-break: break-all;
+  user-select: all;
+}
+
+.fortschrittsbalken {
+  height: 0.6rem;
+  background: var(--panel);
+  border: 1px solid var(--rand);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.fortschrittsbalken > div { height: 100%; background: var(--primaer); }
+
+.fusszeile {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rand);
+  font-size: 0.85rem;
+  color: var(--gedaempft);
+}
+
+/* Nur für Vorleseprogramme sichtbar. */
+.nur-vorlesen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
