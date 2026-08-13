@@ -1,0 +1,10 @@
+================================================================================================
+AUFBAU DER WISSENSDATENBANK
+================================================================================================
+
+--- PDF-Dokumente ---
+[1/8] BMG_Pflegeleistungen_zum_Nachschlagen.pdf (68 Seiten, digital) …
+      66547 Zeichen in 42s
+[2/8] BMG_Ratgeber_Pflege.pdf (184 Seiten, digital) …
+      248642 Zeichen in 122s
+[3/8] GKV-Schriftenreihe_Pflege_Band_2_18962.pdf (365 Seiten, digital) …

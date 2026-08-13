@@ -23,16 +23,21 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import List, Optional, Sequence
 
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, DateTime, LargeBinary, String, create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession, declarative_base, sessionmaker
+
+import pflege_rag
+import pflege_service
 
 load_dotenv()
 
@@ -42,6 +47,8 @@ CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "3600"))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./pflege_sicher.db")
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:8501")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+# Eingescannte Gutachten sind erfahrungsgemäß groß.
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "30")) * 1024 * 1024
 
 if not ENCRYPTION_KEY:
     # Nur für lokale Entwicklung: Ohne festen Key in .env wird bei jedem Neustart
@@ -137,6 +144,50 @@ class SessionLoadResponse(BaseModel):
 
 class ExtendResponse(BaseModel):
     expires_at: datetime
+
+
+class UploadErgebnisModel(BaseModel):
+    """Rückmeldung zu einer hochgeladenen Datei."""
+
+    dateiname: str
+    erfolgreich: bool
+    abschnitte: int = 0
+    hinweis: str = ""
+
+
+class UploadResponse(BaseModel):
+    ergebnisse: List[UploadErgebnisModel]
+    dokumente: List[str]
+
+
+class ChatRequest(BaseModel):
+    """Eine Frage an den Assistenten.
+
+    Entweder ``aktion`` (eine der vorbereiteten Aufgaben) oder ``frage``
+    (freie Eingabe). Die Perspektive bestimmt, ob der Widerspruch in der
+    Ich-Form oder für eine andere Person geschrieben wird.
+    """
+
+    aktion: Optional[str] = None
+    frage: Optional[str] = None
+    perspektive: str = "selbst"
+    versicherte_name: str = ""
+    verhaeltnis: str = ""
+
+
+class ActionModel(BaseModel):
+    schluessel: str
+    titel: str
+    beschreibung: str
+    nutzertext: str
+    braucht_perspektive: bool
+
+
+class StatusResponse(BaseModel):
+    wissensbasis_abschnitte: int
+    vektordatenbank: str
+    neubewertung: str
+    sprachmodell: str
 
 
 # ------------------------------------------------------------
@@ -304,7 +355,177 @@ def delete_session(token: str, db: DbSession = Depends(get_db)):
         db.close()
         # Erst das Neuschreiben der Datei entfernt die Inhalte endgültig.
         _rewrite_database_file()
+    # Auch den Suchindex im Arbeitsspeicher freigeben.
+    pflege_service.user_indices.entferne(token)
     return {"message": "Sitzung und alle zugehörigen Daten wurden vollständig gelöscht."}
+
+
+# ---------------------------------------------------------------------------
+# UNTERLAGEN
+# ---------------------------------------------------------------------------
+def _dokumente_aus_sitzung(daten: dict) -> List[Document]:
+    return [
+        Document(page_content=e.get("page_content", ""), metadata=e.get("metadata", {}))
+        for e in daten.get("user_documents", []) or []
+    ]
+
+
+def _dokumente_speichern(daten: dict, dokumente: Sequence[Document]) -> None:
+    daten["user_documents"] = [
+        {"page_content": d.page_content, "metadata": d.metadata} for d in dokumente
+    ]
+    daten["document_names"] = sorted(
+        {d.metadata.get("source", "") for d in dokumente if d.metadata.get("source")}
+    )
+
+
+@app.post("/session/{token}/documents", response_model=UploadResponse)
+async def upload_documents(
+    token: str, files: List[UploadFile] = File(...), db: DbSession = Depends(get_db)
+):
+    """Nimmt PDF-Dateien entgegen, liest sie ein und legt sie in der Sitzung ab.
+
+    Die Verarbeitung geschieht hier und nicht in der Oberfläche: Damit kommt
+    jede Oberfläche mit demselben Verhalten aus, und die Dateien müssen nicht
+    für jede Anfrage erneut übertragen werden.
+    """
+    record = _get_valid_record(db, token)
+    daten = _decrypt(record.data_encrypted)
+    vorhandene = _dokumente_aus_sitzung(daten)
+    bekannte_namen = {d.metadata.get("source") for d in vorhandene}
+
+    ergebnisse: List[UploadErgebnisModel] = []
+    for datei in files:
+        if datei.filename in bekannte_namen:
+            ergebnisse.append(UploadErgebnisModel(
+                dateiname=datei.filename, erfolgreich=False,
+                hinweis="Diese Datei ist bereits eingelesen."))
+            continue
+
+        inhalt = await datei.read()
+        if len(inhalt) > MAX_UPLOAD_BYTES:
+            ergebnisse.append(UploadErgebnisModel(
+                dateiname=datei.filename, erfolgreich=False,
+                hinweis=f"Die Datei ist größer als {MAX_UPLOAD_BYTES // (1024 * 1024)} MB."))
+            continue
+
+        abschnitte, ergebnis = pflege_service.verarbeite_pdf(inhalt, datei.filename)
+        vorhandene.extend(abschnitte)
+        bekannte_namen.add(datei.filename)
+        ergebnisse.append(UploadErgebnisModel(**ergebnis.__dict__))
+
+    _dokumente_speichern(daten, vorhandene)
+    record.data_encrypted = _encrypt(daten)
+    record.last_accessed_at = utcnow()
+    db.commit()
+    pflege_service.user_indices.entferne(token)  # Index wird bei der nächsten Frage neu gebaut
+    return UploadResponse(ergebnisse=ergebnisse, dokumente=daten["document_names"])
+
+
+@app.delete("/session/{token}/documents/{dateiname}")
+def delete_document(token: str, dateiname: str, db: DbSession = Depends(get_db)):
+    """Entfernt eine einzelne Unterlage aus der Sitzung."""
+    record = _get_valid_record(db, token)
+    daten = _decrypt(record.data_encrypted)
+    verbleibend = [
+        d for d in _dokumente_aus_sitzung(daten) if d.metadata.get("source") != dateiname
+    ]
+    _dokumente_speichern(daten, verbleibend)
+    record.data_encrypted = _encrypt(daten)
+    db.commit()
+    pflege_service.user_indices.entferne(token)
+    return {"dokumente": daten["document_names"]}
+
+
+# ---------------------------------------------------------------------------
+# ASSISTENT
+# ---------------------------------------------------------------------------
+@app.get("/actions", response_model=List[ActionModel])
+def list_actions():
+    """Die vorbereiteten Aufgaben, damit jede Oberfläche dieselben anbietet."""
+    return [
+        ActionModel(
+            schluessel=a.schluessel, titel=a.titel, beschreibung=a.beschreibung,
+            nutzertext=a.nutzertext, braucht_perspektive=a.braucht_perspektive,
+        )
+        for a in pflege_rag.QUICK_ACTIONS
+    ]
+
+
+@app.get("/status", response_model=StatusResponse)
+def status():
+    """Betriebszustand - hilfreich bei der Einrichtung."""
+    return StatusResponse(
+        wissensbasis_abschnitte=pflege_service.ressourcen.wissensbasis_umfang(),
+        vektordatenbank=pflege_rag.qdrant_betriebsart(),
+        neubewertung=pflege_rag.reranker_backend(),
+        sprachmodell=pflege_rag.LLM_MODEL,
+    )
+
+
+@app.post("/session/{token}/chat")
+def chat(token: str, anfrage: ChatRequest, db: DbSession = Depends(get_db)):
+    """Beantwortet eine Frage und sendet den Fortschritt fortlaufend.
+
+    Die Antwort kommt als Ereignisstrom (Server-Sent Events), damit die
+    Oberfläche den Text beim Entstehen anzeigen kann statt am Ende auf einen
+    Block zu warten.
+    """
+    record = _get_valid_record(db, token)
+    daten = _decrypt(record.data_encrypted)
+    dokumente = _dokumente_aus_sitzung(daten)
+    verlauf = list(daten.get("messages", []) or [])
+
+    aktion = pflege_rag.QUICK_ACTION_BY_KEY.get(anfrage.aktion or "")
+    person = pflege_rag.Antragsteller(
+        perspektive=anfrage.perspektive,
+        versicherte_name=anfrage.versicherte_name,
+        verhaeltnis=anfrage.verhaeltnis,
+    )
+    if aktion is not None:
+        anzeige, anweisung = aktion.nutzertext, aktion.render(person)
+        zusatzfragen = aktion.zusatzfragen
+    else:
+        anzeige = anweisung = (anfrage.frage or "").strip()
+        zusatzfragen = ()
+    if not anzeige:
+        raise HTTPException(status_code=400, detail="Es wurde keine Frage übergeben.")
+
+    def ereignisse():
+        antwort, quellen = "", []
+        for meldung in pflege_service.beantworte(
+            token, anzeige, anweisung, verlauf, dokumente, zusatzfragen
+        ):
+            if meldung["art"] == "ergebnis":
+                antwort, quellen = meldung["antwort"], meldung["quellen"]
+            yield f"data: {json.dumps(meldung, ensure_ascii=False)}\n\n"
+
+        # Erst nach dem vollständigen Durchlauf speichern, mit eigener
+        # Datenbanksitzung: die des Aufrufs ist zu diesem Zeitpunkt geschlossen.
+        if antwort:
+            eigene = SessionLocal()
+            try:
+                eintrag = eigene.query(SessionRecord).filter(SessionRecord.token == token).first()
+                if eintrag is not None:
+                    stand = _decrypt(eintrag.data_encrypted)
+                    nachrichten = list(stand.get("messages", []) or [])
+                    nachrichten.append({"role": "user", "content": anzeige})
+                    nachrichten.append({"role": "assistant", "content": antwort})
+                    stand["messages"] = nachrichten
+                    stand["last_sources"] = quellen
+                    if aktion is not None and aktion.schluessel == "schreiben":
+                        stand["last_generated_letter"] = antwort
+                    eintrag.data_encrypted = _encrypt(stand)
+                    eintrag.last_accessed_at = utcnow()
+                    eigene.commit()
+            finally:
+                eigene.close()
+
+    return StreamingResponse(
+        ereignisse(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":

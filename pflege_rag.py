@@ -25,11 +25,17 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Iterable, Iterator, List, Optional, Sequence, Tuple
 
+from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
+
+# Die Einstellungen werden hier geladen, nicht erst im aufrufenden Programm.
+# Sonst verhielte sich dasselbe Modul je nach Einstiegspunkt unterschiedlich -
+# etwa eingebettete statt dienstbasierter Vektordatenbank.
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # KONFIGURATION
@@ -38,6 +44,12 @@ LM_STUDIO_URL = os.getenv("LM_STUDIO_URL", "http://127.0.0.1:1234/v1")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-bge-m3")
 LLM_MODEL = os.getenv("LLM_MODEL", "mistralai/mistral-nemo-instruct-2407")
 QDRANT_DIR = os.getenv("QDRANT_DIR", "./qdrant_db")
+# Ist eine Adresse gesetzt, wird die Vektordatenbank als eigener Dienst
+# angesprochen (siehe docker-compose.yml). Dann dürfen mehrere Prozesse
+# gleichzeitig zugreifen - etwa die Anwendung und ingest.py.
+# Ohne Adresse wird der eingebettete Betrieb genutzt: keine zusätzliche
+# Software nötig, dafür immer nur ein Prozess.
+QDRANT_URL = os.getenv("QDRANT_URL", "").strip()
 COLLECTION_NAME = "pflege_fachwissen"
 
 # Mehrsprachiger Cross-Encoder, passend zur Einbettungsfamilie bge-m3.
@@ -411,10 +423,25 @@ def reranker_backend() -> str:
     return "Grafikkarte (DirectML)" if _dml_verfuegbar() else "Prozessor"
 
 
+def create_qdrant_client() -> QdrantClient:
+    """Öffnet die Vektordatenbank - als Dienst oder eingebettet.
+
+    Der Dienstbetrieb (``QDRANT_URL``) erlaubt gleichzeitige Zugriffe; der
+    eingebettete Betrieb kommt ohne zusätzliche Software aus, sperrt das
+    Verzeichnis aber für alle anderen Prozesse.
+    """
+    if QDRANT_URL:
+        return QdrantClient(url=QDRANT_URL)
+    return QdrantClient(path=QDRANT_DIR)
+
+
+def qdrant_betriebsart() -> str:
+    return f"Dienst ({QDRANT_URL})" if QDRANT_URL else f"eingebettet ({QDRANT_DIR})"
+
+
 def open_expert_database(embeddings) -> QdrantVectorStore:
-    client = QdrantClient(path=QDRANT_DIR)
     return QdrantVectorStore(
-        client=client, collection_name=COLLECTION_NAME, embedding=embeddings
+        client=create_qdrant_client(), collection_name=COLLECTION_NAME, embedding=embeddings
     )
 
 

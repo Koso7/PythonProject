@@ -175,3 +175,94 @@ class TestVerschluesselung:
 
     def test_leerer_inhalt_ist_zulaessig(self, dienst):
         assert dienst._decrypt(None) == {}
+
+
+# ---------------------------------------------------------------------------
+# UNTERLAGEN UND ASSISTENT
+# ---------------------------------------------------------------------------
+class TestActions:
+    def test_liefert_die_vier_aufgaben(self, client):
+        aufgaben = client.get("/actions").json()
+        assert len(aufgaben) == 4
+        assert {a["schluessel"] for a in aufgaben} == {
+            "einlesen", "differenz", "argumente", "schreiben"
+        }
+
+    def test_jede_aufgabe_ist_beschriftet(self, client):
+        for aufgabe in client.get("/actions").json():
+            assert aufgabe["titel"] and aufgabe["beschreibung"] and aufgabe["nutzertext"]
+
+
+class TestStatus:
+    def test_meldet_die_betriebsart(self, client):
+        daten = client.get("/status").json()
+        assert "vektordatenbank" in daten and daten["sprachmodell"]
+
+
+class TestDokumente:
+    def _pdf_bytes(self) -> bytes:
+        # Ein minimales, aber gültiges PDF mit Text.
+        from fpdf import FPDF
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=12)
+        pdf.multi_cell(0, 6, text=("Im Modul 4 Selbstversorgung besteht taeglich Hilfebedarf "
+                                   "beim Waschen und Ankleiden. " * 6))
+        return bytes(pdf.output())
+
+    def test_weist_zu_grosse_dateien_ab(self, dienst, client, monkeypatch):
+        monkeypatch.setattr(dienst, "MAX_UPLOAD_BYTES", 10)
+        token = neue_sitzung(client)
+        antwort = client.post(
+            f"/session/{token}/documents",
+            files={"files": ("gross.pdf", self._pdf_bytes(), "application/pdf")},
+        )
+        ergebnis = antwort.json()["ergebnisse"][0]
+        assert not ergebnis["erfolgreich"] and "größer" in ergebnis["hinweis"]
+
+    def test_unbekannter_code_wird_abgewiesen(self, client):
+        antwort = client.post(
+            "/session/gibtesnicht/documents",
+            files={"files": ("a.pdf", b"%PDF-1.4", "application/pdf")},
+        )
+        assert antwort.status_code == 404
+
+    def test_entfernt_eine_unterlage(self, dienst, client):
+        token = neue_sitzung(client)
+        # Unterlagen direkt in die Sitzung legen, ohne den PDF-Umweg.
+        client.put(f"/session/{token}", json={"data": {
+            "user_documents": [
+                {"page_content": "Inhalt A", "metadata": {"source": "a.pdf"}},
+                {"page_content": "Inhalt B", "metadata": {"source": "b.pdf"}},
+            ]
+        }})
+        antwort = client.delete(f"/session/{token}/documents/a.pdf")
+        assert antwort.json()["dokumente"] == ["b.pdf"]
+        verbleibend = client.get(f"/session/{token}").json()["data"]["user_documents"]
+        assert [d["metadata"]["source"] for d in verbleibend] == ["b.pdf"]
+
+
+class TestChatEingaben:
+    def test_leere_anfrage_wird_abgewiesen(self, client):
+        token = neue_sitzung(client)
+        antwort = client.post(f"/session/{token}/chat", json={})
+        assert antwort.status_code == 400
+
+    def test_unbekannter_code_wird_abgewiesen(self, client):
+        antwort = client.post("/session/gibtesnicht/chat", json={"frage": "Test"})
+        assert antwort.status_code == 404
+
+
+class TestIndexFreigabe:
+    """Beim Löschen einer Sitzung muss auch der Suchindex verschwinden."""
+
+    def test_loeschen_gibt_den_index_frei(self, dienst, client):
+        import pflege_service
+
+        token = neue_sitzung(client)
+        pflege_service.user_indices._eintraege[token] = pflege_service.UserIndexEintrag(
+            index=None, fingerabdruck="test"
+        )
+        client.delete(f"/session/{token}")
+        assert token not in pflege_service.user_indices._eintraege

@@ -1,0 +1,31 @@
+# Vektordatenbank als eigener Dienst.
+#
+# Im eingebetteten Betrieb darf nur ein Prozess gleichzeitig auf die Datenbank
+# zugreifen; ingest.py und die Anwendung schließen sich dann gegenseitig aus.
+# Als Dienst entfällt diese Einschränkung.
+#
+# Start:   docker compose up -d
+# Stopp:   docker compose down
+# Zustand: docker compose ps
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: pflege-qdrant
+    restart: unless-stopped
+    ports:
+      # WICHTIG: Die Bindung an 127.0.0.1 ist sicherheitsrelevant. Ohne diesen
+      # Zusatz lauscht der Dienst auf allen Netzwerkschnittstellen und wäre aus
+      # dem gesamten Netzwerk erreichbar - ohne Passwortabfrage, denn Qdrant
+      # verlangt standardmäßig keine.
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      # Telemetrie an den Hersteller abschalten: Bei Gesundheitsdaten soll
+      # nichts nach außen gehen.
+      QDRANT__TELEMETRY_DISABLED: "true"
+      QDRANT__LOG_LEVEL: "WARN"
+
+volumes:
+  qdrant_storage:

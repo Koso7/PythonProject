@@ -33,7 +33,6 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
 from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 
 import pflege_rag
@@ -325,13 +324,19 @@ def build_expert_database() -> int:
     print(f"{len(alle_chunks)} verwertbare Abschnitte aus {len(alle_docs)} Quellen.")
 
     print("\n--- Einbettungen berechnen und speichern ---")
+    print(f"Vektordatenbank: {pflege_rag.qdrant_betriebsart()}")
     embeddings = pflege_rag.create_embeddings()
     vektorgroesse = len(embeddings.embed_query("Test"))
 
-    if os.path.exists(QDRANT_DIR):
+    if not pflege_rag.QDRANT_URL and os.path.exists(QDRANT_DIR):
+        # Eingebetteter Betrieb: das Verzeichnis wird vollständig neu angelegt.
         shutil.rmtree(QDRANT_DIR)
 
-    client = QdrantClient(path=QDRANT_DIR)
+    client = pflege_rag.create_qdrant_client()
+    if pflege_rag.QDRANT_URL:
+        # Im Dienstbetrieb bleibt der Speicher bestehen; nur die Sammlung wird
+        # ersetzt, damit kein Altbestand mit neuen Abschnitten vermischt wird.
+        client.delete_collection(collection_name=pflege_rag.COLLECTION_NAME)
     client.create_collection(
         collection_name=pflege_rag.COLLECTION_NAME,
         vectors_config=VectorParams(size=vektorgroesse, distance=Distance.COSINE),
