@@ -1,8 +1,7 @@
-# Hintergrunddienst und Weboberfläche.
-#
-# Die Oberfläche ist ein React-Programm im Ordner frontend/ und bringt eigene
-# Abhängigkeiten mit (frontend/package.json, Installation mit "npm install").
-# Hier steht nur der Dienst, den sie anspricht.
+# Weboberfläche
+streamlit
+
+# Hintergrunddienst für die Sitzungsverwaltung
 fastapi
 uvicorn
 python-multipart

@@ -13,8 +13,7 @@ Anbieter im Internet.
 
 | Was | Warum |
 |---|---|
-| **Python 3.11 oder neuer** | Hintergrunddienst und Suche |
-| **Node.js 20 oder neuer** ([nodejs.org](https://nodejs.org)) | Weboberfläche (React) |
+| **Python 3.11 oder neuer** | Anwendung und Hintergrunddienst |
 | **Docker Desktop** ([docker.com](https://www.docker.com/products/docker-desktop/)) | Vektordatenbank als Dienst |
 | **LM Studio** ([lmstudio.ai](https://lmstudio.ai)) | führt Sprachmodell und Einbettungen örtlich aus |
 | ca. **12 GB freier Speicher** | Modelle, Wissensdatenbank, ONNX-Fassung des Rerankers |
@@ -45,11 +44,9 @@ python -m venv .venv
 # source .venv/bin/activate       # Linux/macOS
 
 pip install -r requirements.txt
-
-npm install --prefix frontend
 ```
 
-> Docker, Node und LM Studio laufen alle auf diesem Rechner. **Docker ist keine Cloud** – der
+> Docker und LM Studio laufen beide auf diesem Rechner. **Docker ist keine Cloud** – der
 > Behälter mit der Vektordatenbank läuft örtlich und ist an `127.0.0.1` gebunden, also nicht
 > einmal aus dem eigenen Netzwerk erreichbar.
 
@@ -126,14 +123,14 @@ docker compose up -d
 ```
 
 ```bash
-npm run dev --prefix frontend
+streamlit run app.py
 ```
 
-Danach im Browser: <http://localhost:5173>
+Danach im Browser: <http://localhost:8501>
 
-> Alle drei lauschen bewusst **nur örtlich** (`127.0.0.1`). Die Pflegeunterlagen sind dadurch nicht
-> aus dem Netzwerk erreichbar. Der erste Start des Dienstes dauert etwa eine Minute, weil das
-> Modell für die Neubewertung geladen wird.
+> Alle drei lauschen bewusst **nur örtlich** (`127.0.0.1` bzw. `localhost`). Die Pflegeunterlagen
+> sind dadurch nicht aus dem Netzwerk erreichbar. Der erste Start dauert etwa eine Minute, weil
+> das Modell für die Neubewertung geladen wird.
 
 Zum Beenden:
 
@@ -146,9 +143,7 @@ docker compose down
 ## 5. Aufbau des Projekts
 
 ```
-frontend/         Weboberfläche (React, TypeScript, Vite): vier Reiter, Bedienführung
-  src/api.ts        Anbindung an den Dienst, einschließlich Ereignisstrom für den Chat
-  src/components/   Startseite, Unterlagen, Chat, PDF, Einstellungen
+app.py            Weboberfläche (Streamlit): vier Reiter, Bedienführung, Fortschrittsanzeige
 backend.py        Dienst (FastAPI): Zugangscodes, verschlüsselte Ablage, Schnittstellen
 pflege_service.py Fachlogik zwischen Dienst und Suche: Dokumentenaufbereitung, Antwortstrom
 pflege_rag.py     Suche und Antworterzeugung: hybride Suche, Neubewertung, Belegstellen
@@ -207,6 +202,8 @@ verbleibenden Module mit Erfundenem.
   tatsächlich entfernt, nicht nur als frei markiert.
 * Sitzungen laufen nach 4 Wochen ab und werden selbsttätig gelöscht; eine Verlängerung um 3 Tage
   ist jederzeit möglich.
+* Die Nutzungsstatistik von Streamlit ist abgeschaltet und die Oberfläche lauscht nur örtlich
+  (`.streamlit/config.toml`).
 * Die Vektordatenbank ist an `127.0.0.1` gebunden und ihre Telemetrie ist abgeschaltet
   (`docker-compose.yml`). Qdrant verlangt von sich aus **kein** Passwort – ohne diese Bindung wäre
   sie aus dem gesamten Netzwerk offen.

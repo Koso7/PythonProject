@@ -4,14 +4,33 @@
     {
       "name": "backend",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "backend:app", "--host", "127.0.0.1", "--port", "8000"],
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "backend:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
       "port": 8000
     },
     {
-      "name": "frontend",
-      "runtimeExecutable": "npm.cmd",
-      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
-      "port": 5173
+      "name": "streamlit",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-m",
+        "streamlit",
+        "run",
+        "app.py",
+        "--server.port",
+        "8501",
+        "--server.address",
+        "localhost",
+        "--server.headless",
+        "true"
+      ],
+      "port": 8501
     }
   ]
 }

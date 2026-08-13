@@ -47,7 +47,7 @@ SESSION_LIFETIME_DAYS = int(os.getenv("SESSION_LIFETIME_DAYS", "28"))
 SESSION_EXTEND_DAYS = int(os.getenv("SESSION_EXTEND_DAYS", "3"))
 CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "3600"))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./pflege_sicher.db")
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:8501")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 # Eingescannte Gutachten sind erfahrungsgemäß groß.
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "30")) * 1024 * 1024
@@ -262,10 +262,10 @@ app = FastAPI(title="Pflege-Assistent Session-API", version="2.0.0", lifespan=li
 app.add_middleware(
     CORSMiddleware,
     # Nur die Oberfläche auf diesem Rechner darf den Dienst ansprechen.
-    # localhost und 127.0.0.1 gelten dem Browser als verschiedene Herkünfte,
-    # deshalb stehen beide Schreibweisen hier.
-    allow_origins=sorted({FRONTEND_ORIGIN, "http://localhost:5173",
-                          "http://127.0.0.1:5173"}),
+    # Die Streamlit-Oberfläche spricht den Dienst serverseitig an, für sie
+    # spielt CORS keine Rolle; die Einstellung bleibt für den Fall, dass
+    # wieder eine Oberfläche im Browser dazukommt.
+    allow_origins=sorted({FRONTEND_ORIGIN, "http://127.0.0.1:8501"}),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type"],
