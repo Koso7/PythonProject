@@ -232,6 +232,19 @@ class LetterData:
     # angehörige Person für sie.
     perspektive: str = SELBST
     verhaeltnis: str = ""
+    # Beigefügte Unterlagen, eine je Zeile. Bleibt das Feld leer, entfällt der
+    # Anlagenblock ganz.
+    anlagen: str = ""
+
+    @property
+    def anlagenliste(self) -> List[str]:
+        """Die Anlagen als bereinigte Liste, ohne Aufzählungszeichen."""
+        zeilen = []
+        for zeile in (self.anlagen or "").splitlines():
+            sauber = zeile.strip().lstrip("-•*·–— ").strip()
+            if sauber:
+                zeilen.append(sauber)
+        return zeilen
 
     @property
     def schreibt_selbst(self) -> bool:
@@ -248,12 +261,15 @@ class LetterData:
         bezug = f"gegen den Bescheid vom {self.bescheid_datum}"
         if self.aktenzeichen.strip():
             bezug += f" mit dem Aktenzeichen {self.aktenzeichen.strip()}"
+        # Das hervorgehobene Wort steht mitten im Satz. Früher stand es
+        # zentriert auf einer eigenen Zeile, wodurch das "ein." allein in der
+        # nächsten Zeile hing - das sah wie ein Satzfehler aus.
         if self.schreibt_selbst:
-            return f"hiermit lege ich {bezug} form- und fristgerecht"
+            return f"hiermit lege ich {bezug} form- und fristgerecht **Widerspruch** ein."
         name = self.name_versicherte or "die versicherte Person"
         verhaeltnis = self.verhaeltnis.strip()
         wer = f"meine {verhaeltnis}, {name}," if verhaeltnis else f"{name},"
-        return f"hiermit lege ich für {wer} {bezug} form- und fristgerecht"
+        return f"hiermit lege ich für {wer} {bezug} form- und fristgerecht **Widerspruch** ein."
 
     @property
     def unterschrift_hinweis(self) -> str:
@@ -343,10 +359,16 @@ def _text(pdf: FPDF, schrift: str, inhalt: str, groesse: int = SCHRIFTGROESSE,
 
 
 def _absatz(pdf: FPDF, schrift: str, inhalt: str, groesse: int = SCHRIFTGROESSE,
-            stil: str = "", hoehe: float = ZEILENHOEHE) -> None:
+            stil: str = "", hoehe: float = ZEILENHOEHE, markdown: bool = False) -> None:
+    """Schreibt einen Fließtextabsatz.
+
+    Mit ``markdown`` werden ``**Sternchen**`` als Fettdruck gesetzt. Das wird
+    nur für die Einleitung genutzt; der vom Modell erzeugte Text durchläuft
+    vorher ``strip_markdown`` und enthält keine Auszeichnungen mehr.
+    """
     pdf.set_font(schrift, style=stil, size=groesse)
     pdf.multi_cell(0, hoehe, text=inhalt if schrift != "Helvetica" else sanitize(inhalt),
-                   new_x="LMARGIN", new_y="NEXT")
+                   new_x="LMARGIN", new_y="NEXT", markdown=markdown)
 
 
 def build_letter_pdf(data: LetterData) -> bytes:
@@ -416,12 +438,7 @@ def build_letter_pdf(data: LetterData) -> bytes:
     pdf.ln(3)
 
     # --- Einleitung mit hervorgehobenem "Widerspruch" ---------------------
-    _absatz(pdf, schrift, data.einleitungssatz)
-    pdf.ln(2)
-    pdf.set_font(schrift, style="B", size=14)
-    pdf.cell(0, 8, text="Widerspruch", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.ln(1)
-    _text(pdf, schrift, "ein.")
+    _absatz(pdf, schrift, data.einleitungssatz, markdown=True)
     pdf.ln(4)
 
     # --- Begründung -------------------------------------------------------
@@ -437,7 +454,9 @@ def build_letter_pdf(data: LetterData) -> bytes:
                 pdf.ln(2)
 
     pdf.ln(2)
-    _absatz(pdf, schrift, "Ich bitte Sie, mir den Eingang des Widerspruchs zu bestätigen.")
+    # Nicht "Ich bitte Sie ...": die Begründung endet häufig selbst mit einer
+    # Bitte, zwei gleich beginnende Sätze hintereinander lesen sich holprig.
+    _absatz(pdf, schrift, "Bitte bestätigen Sie mir den Eingang dieses Widerspruchs.")
 
     # --- Grußformel und Unterschrift --------------------------------------
     pdf.ln(8)
@@ -451,5 +470,17 @@ def build_letter_pdf(data: LetterData) -> bytes:
     pdf.set_text_color(110, 110, 110)
     _text(pdf, schrift, data.unterschrift_hinweis, groesse=8, hoehe=4)
     pdf.set_text_color(0, 0, 0)
+
+    # --- Anlagen ----------------------------------------------------------
+    # Steht nach DIN 5008 unter der Unterschrift. Ohne Eintrag entfällt der
+    # Block, damit kein leerer Abschnitt im Brief steht.
+    anlagen = data.anlagenliste
+    if anlagen:
+        pdf.ln(8)
+        _text(pdf, schrift, "Anlagen", stil="B")
+        pdf.ln(1)
+        for eintrag in anlagen:
+            # Ohne Aufzählungszeichen: so steht es in Geschäftsbriefen.
+            _absatz(pdf, schrift, eintrag)
 
     return bytes(pdf.output())

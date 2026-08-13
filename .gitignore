@@ -13,9 +13,10 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Erzeugte Widerspruchsschreiben und Datenbankauszüge
+# Erzeugte Widerspruchsschreiben, Protokolle und Datenbankauszüge
 Widerspruch_*.pdf
 datenbank_dump.txt
+ingest_log.txt
 
 # Virtuelle Umgebung
 .venv/

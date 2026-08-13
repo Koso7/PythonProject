@@ -1,14 +1,16 @@
-# Weboberfläche
-streamlit
-requests
-
-# Hintergrunddienst für die Sitzungsverwaltung
+# Hintergrunddienst und Weboberfläche.
+#
+# Die Oberfläche ist ein React-Programm im Ordner frontend/ und bringt eigene
+# Abhängigkeiten mit (frontend/package.json, Installation mit "npm install").
+# Hier steht nur der Dienst, den sie anspricht.
 fastapi
 uvicorn
+python-multipart
 sqlalchemy
 cryptography
 pydantic
 python-dotenv
+requests
 
 # Sprachmodell- und Retrieval-Orchestrierung
 langchain

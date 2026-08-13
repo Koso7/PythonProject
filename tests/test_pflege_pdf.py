@@ -196,7 +196,7 @@ class TestBuildLetterPdf:
         "erwartet",
         ["Michaela", "Pflegekasse bei der Musterkrankenkasse", "Widerspruch",
          "AZ-2026/4711", "14.03.2026", "A123456789",
-         "Eingang des Widerspruchs", "Begründung"],
+         "Eingang dieses Widerspruchs", "Begründung"],
     )
     def test_enthaelt_alle_pflichtbestandteile(self, vollstaendige_daten, tmp_path, erwartet):
         assert erwartet in _pdf_text(vollstaendige_daten, tmp_path)
@@ -208,6 +208,28 @@ class TestBuildLetterPdf:
         assert text.index("Sehr geehrte") < text.index("form- und fristgerecht")
         assert text.index("form- und fristgerecht") < text.index("Begründung")
         assert text.index("Begründung") < text.index("freundlichen")
+
+    def test_widerspruch_steht_im_satz_und_nicht_allein(self, vollstaendige_daten, tmp_path):
+        """Das hervorgehobene Wort gehört in den Satz.
+
+        Stand es zentriert auf einer eigenen Zeile, hing das abschließende
+        "ein." allein in der nächsten Zeile und wirkte wie ein Satzfehler.
+        """
+        text = " ".join(_pdf_text(vollstaendige_daten, tmp_path).split())
+        assert "form- und fristgerecht Widerspruch ein." in text
+
+    def test_anlagen_erscheinen_unter_der_unterschrift(self, vollstaendige_daten, tmp_path):
+        vollstaendige_daten.anlagen = "Kopie des Bescheids\n- Pflegetagebuch\n\n"
+        text = " ".join(_pdf_text(vollstaendige_daten, tmp_path).split())
+        assert text.index("freundlichen") < text.index("Anlagen")
+        assert "Kopie des Bescheids" in text
+        # Führende Aufzählungszeichen werden entfernt.
+        assert "- Pflegetagebuch" not in text
+        assert "Pflegetagebuch" in text
+
+    def test_ohne_anlagen_kein_leerer_abschnitt(self, vollstaendige_daten, tmp_path):
+        vollstaendige_daten.anlagen = "   \n \n"
+        assert "Anlagen" not in _pdf_text(vollstaendige_daten, tmp_path)
 
     def test_fristwahrende_variante_kuendigt_begruendung_an(self, tmp_path):
         daten = pdf.LetterData(

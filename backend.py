@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import secrets
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence
@@ -209,6 +210,8 @@ class LetterRequest(BaseModel):
     begruendung_folgt: bool = False
     perspektive: str = "selbst"
     verhaeltnis: str = ""
+    # Beigefügte Unterlagen, eine je Zeile. Optional.
+    anlagen: str = ""
 
 
 class LetterCheckResponse(BaseModel):
@@ -564,12 +567,28 @@ def chat(token: str, anfrage: ChatRequest, db: DbSession = Depends(get_db)):
 
     def ereignisse():
         antwort, quellen = "", []
-        for meldung in pflege_service.beantworte(
-            token, anzeige, anweisung, verlauf, dokumente, zusatzfragen
-        ):
-            if meldung["art"] == "ergebnis":
-                antwort, quellen = meldung["antwort"], meldung["quellen"]
-            yield f"data: {json.dumps(meldung, ensure_ascii=False)}\n\n"
+        try:
+            for meldung in pflege_service.beantworte(
+                token, anzeige, anweisung, verlauf, dokumente, zusatzfragen
+            ):
+                if meldung["art"] == "ergebnis":
+                    antwort, quellen = meldung["antwort"], meldung["quellen"]
+                yield f"data: {json.dumps(meldung, ensure_ascii=False)}\n\n"
+        except Exception as fehler:
+            # Ohne diese Meldung endet der Strom stillschweigend und die
+            # Oberfläche wartet endlos auf eine Antwort, die nie kommt.
+            # Der Wortlaut des Fehlers bleibt im Dienst: er könnte Auszüge aus
+            # den Unterlagen enthalten.
+            print(f"❌ Fehler bei der Beantwortung: {type(fehler).__name__}: {fehler}")
+            traceback.print_exc()
+            hinweis = {
+                "art": "fehler",
+                "text": "Die Antwort konnte nicht erzeugt werden. Bitte versuchen Sie es "
+                        "noch einmal. Bleibt es dabei, hilft ein Blick in das Fenster des "
+                        "Hintergrunddienstes.",
+            }
+            yield f"data: {json.dumps(hinweis, ensure_ascii=False)}\n\n"
+            return
 
         # Erst nach dem vollständigen Durchlauf speichern, mit eigener
         # Datenbanksitzung: die des Aufrufs ist zu diesem Zeitpunkt geschlossen.
@@ -586,6 +605,10 @@ def chat(token: str, anfrage: ChatRequest, db: DbSession = Depends(get_db)):
                     stand["last_sources"] = quellen
                     if aktion is not None and aktion.schluessel == "schreiben":
                         stand["last_generated_letter"] = antwort
+                        # Zusätzlich die briefreife Fassung ablegen: ohne Anrede,
+                        # Grußformel und Belegziffern. Die Oberfläche übernimmt
+                        # sie unverändert, damit dort nichts Ungeputztes steht.
+                        stand["letter_draft"] = pflege_pdf.prepare_begruendung(antwort)
                     eintrag.data_encrypted = _encrypt(stand)
                     eintrag.last_accessed_at = utcnow()
                     eigene.commit()

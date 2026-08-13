@@ -204,6 +204,22 @@ export function BriefTab({
         Begründung später nachreichen (Widerspruch zunächst nur fristwahrend einlegen)
       </label>
 
+      <div className="feld" style={{ marginTop: "1.5rem" }}>
+        <label htmlFor="anlagen">Anlagen (freiwillig)</label>
+        <textarea
+          id="anlagen"
+          rows={3}
+          value={angaben.anlagen ?? ""}
+          onChange={(e) => aendern("anlagen", e.target.value)}
+          placeholder={"Kopie des Bescheids vom 12.03.2025\nPflegetagebuch für zwei Wochen\nÄrztliches Attest"}
+          aria-describedby="anlagen-hilfe"
+        />
+        <div className="hilfe" id="anlagen-hilfe">
+          Eine Unterlage je Zeile. Diese Liste erscheint unter Ihrer Unterschrift. Bleibt das
+          Feld leer, entfällt der Abschnitt.
+        </div>
+      </div>
+
       <h3 style={{ marginTop: "1.5rem" }}>4. PDF erstellen</h3>
       {fehlend.length > 0 ? (
         <Hinweis art="warnung">

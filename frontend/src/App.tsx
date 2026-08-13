@@ -30,6 +30,7 @@ const LEERE_ANGABEN: Briefangaben = {
   kasse_name: "", kasse_strasse: "", kasse_plz_ort: "",
   versichert_name: "", versichert_nr: "", aktenzeichen: "", bescheid_datum: "",
   begruendung: "", begruendung_folgt: false, perspektive: "selbst", verhaeltnis: "",
+  anlagen: "",
 };
 
 type Reiter = "unterlagen" | "chat" | "brief" | "einstellungen";
@@ -68,7 +69,11 @@ export default function App() {
     setDokumente((daten.document_names as string[]) ?? []);
     setVerlauf((daten.messages as Nachricht[]) ?? []);
     setQuellen((daten.last_sources as Quelle[]) ?? []);
-    setEntwurf((daten.last_generated_letter as string) ?? "");
+    // Der Dienst legt eine briefreife Fassung ab; sie ist bereits von
+    // Anrede, Grußformel und Belegziffern befreit.
+    setEntwurf(
+      (daten.letter_draft as string) ?? (daten.last_generated_letter as string) ?? "",
+    );
     const brief = daten.brief as Partial<Briefangaben> | undefined;
     if (brief) setAngaben({ ...LEERE_ANGABEN, ...brief });
     const darstellung = daten.darstellung as { schrift?: number; kontrast?: boolean } | undefined;

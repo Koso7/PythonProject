@@ -7,6 +7,7 @@ untereinander noch mit der laufenden Anwendung in Konflikt geraten.
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from datetime import timedelta
 
@@ -252,6 +253,49 @@ class TestChatEingaben:
     def test_unbekannter_code_wird_abgewiesen(self, client):
         antwort = client.post("/session/gibtesnicht/chat", json={"frage": "Test"})
         assert antwort.status_code == 404
+
+
+class TestChatAbbruch:
+    """Ein Fehler mitten im Antwortstrom muss die Oberfläche erreichen.
+
+    Bricht die Beantwortung ab, ohne dass etwas gesendet wird, endet der Strom
+    stillschweigend. Die Oberfläche zeigt dann bis in alle Ewigkeit "wird
+    durchsucht ..." an, ohne dass jemand erfährt, was los ist.
+    """
+
+    def test_meldet_einen_abbruch_als_ereignis(self, dienst, client, monkeypatch):
+        import pflege_service
+
+        def bricht_ab(*args, **kwargs):
+            yield {"art": "status", "text": "Wird gesucht …"}
+            raise RuntimeError("Das Sprachmodell antwortet nicht.")
+
+        monkeypatch.setattr(pflege_service, "beantworte", bricht_ab)
+        token = neue_sitzung(client)
+        antwort = client.post(f"/session/{token}/chat", json={"frage": "Test"})
+
+        arten = [
+            json.loads(zeile[6:])["art"]
+            for zeile in antwort.text.splitlines()
+            if zeile.startswith("data: ")
+        ]
+        assert arten == ["status", "fehler"]
+
+    def test_der_wortlaut_des_fehlers_bleibt_im_dienst(self, dienst, client, monkeypatch):
+        """Fehlertexte können Auszüge aus den Unterlagen enthalten."""
+        import pflege_service
+
+        def bricht_ab(*args, **kwargs):
+            raise RuntimeError("Diagnose F00.1 aus dem Gutachten von Frau Müller")
+            yield  # pragma: no cover - macht die Funktion zum Erzeuger
+
+        monkeypatch.setattr(pflege_service, "beantworte", bricht_ab)
+        token = neue_sitzung(client)
+        antwort = client.post(f"/session/{token}/chat", json={"frage": "Test"})
+
+        assert "Müller" not in antwort.text
+        assert "F00.1" not in antwort.text
+        assert "fehler" in antwort.text
 
 
 class TestIndexFreigabe:

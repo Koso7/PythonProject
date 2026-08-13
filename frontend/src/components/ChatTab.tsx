@@ -4,6 +4,7 @@ import {
   ApiFehler,
   aktionenLaden,
   chatStellen,
+  sitzungLaden,
   type Aktion,
   type Nachricht,
   type Perspektive,
@@ -68,6 +69,7 @@ export function ChatTab({
     setEingabe("");
 
     let gesammelt = "";
+    let ergebnisErhalten = false;
     try {
       await chatStellen(
         token,
@@ -80,18 +82,43 @@ export function ChatTab({
         },
         (meldung) => {
           if (meldung.art === "status") setStatus(meldung.text ?? "");
-          else if (meldung.art === "suchfrage") setSuchfrage(meldung.text ?? "");
+          else if (meldung.art === "fehler") {
+            // Der Dienst meldet einen Abbruch. Ohne diesen Zweig bliebe die
+            // Anzeige im Wartezustand stehen.
+            ergebnisErhalten = true;
+            setFehler(meldung.text ?? "Die Antwort konnte nicht erzeugt werden.");
+            setVerlauf(verlauf);
+            setTeilantwort("");
+          } else if (meldung.art === "suchfrage") setSuchfrage(meldung.text ?? "");
           else if (meldung.art === "text") {
             gesammelt += meldung.text ?? "";
             setTeilantwort(gesammelt);
           } else if (meldung.art === "ergebnis") {
+            ergebnisErhalten = true;
             setVerlauf([...bisher, { role: "assistant", content: meldung.antwort ?? "" }]);
             setQuellen(meldung.quellen ?? []);
-            if (aktion?.schluessel === "schreiben") entwurfGesetzt(meldung.antwort ?? "");
+            if (aktion?.schluessel === "schreiben") {
+              // Die briefreife Fassung liegt im Dienst; sie enthält keine
+              // Anrede und keine Belegziffern mehr.
+              sitzungLaden(token)
+                .then((s) => entwurfGesetzt((s.data?.letter_draft as string) ?? meldung.antwort ?? ""))
+                .catch(() => entwurfGesetzt(meldung.antwort ?? ""));
+            }
             setTeilantwort("");
           }
         },
       );
+
+      // Bricht der Strom ab, ohne ein Ergebnis zu liefern, bliebe die Anzeige
+      // sonst stumm im Wartezustand stehen.
+      if (!ergebnisErhalten) {
+        setFehler(
+          "Die Antwort wurde unterwegs abgebrochen. Bitte versuchen Sie es noch einmal – " +
+            "falls es erneut auftritt, prüfen Sie das Fenster des Hintergrunddienstes.",
+        );
+        setVerlauf(verlauf);
+        setTeilantwort("");
+      }
     } catch (e) {
       setFehler(
         e instanceof ApiFehler && e.status === 0
@@ -99,6 +126,7 @@ export function ChatTab({
           : "Der Assistent ist gerade nicht erreichbar. Läuft LM Studio mit geladenem Modell?",
       );
       setVerlauf(verlauf);
+      setTeilantwort("");
     } finally {
       setLaeuft(false);
       setStatus("");

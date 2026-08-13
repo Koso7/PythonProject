@@ -13,7 +13,9 @@ Anbieter im Internet.
 
 | Was | Warum |
 |---|---|
-| **Python 3.11 oder neuer** | Anwendung und Dienst |
+| **Python 3.11 oder neuer** | Hintergrunddienst und Suche |
+| **Node.js 20 oder neuer** ([nodejs.org](https://nodejs.org)) | Weboberfläche (React) |
+| **Docker Desktop** ([docker.com](https://www.docker.com/products/docker-desktop/)) | Vektordatenbank als Dienst |
 | **LM Studio** ([lmstudio.ai](https://lmstudio.ai)) | führt Sprachmodell und Einbettungen örtlich aus |
 | ca. **12 GB freier Speicher** | Modelle, Wissensdatenbank, ONNX-Fassung des Rerankers |
 | 16 GB Arbeitsspeicher empfohlen | |
@@ -43,7 +45,13 @@ python -m venv .venv
 # source .venv/bin/activate       # Linux/macOS
 
 pip install -r requirements.txt
+
+npm install --prefix frontend
 ```
+
+> Docker, Node und LM Studio laufen alle auf diesem Rechner. **Docker ist keine Cloud** – der
+> Behälter mit der Vektordatenbank läuft örtlich und ist an `127.0.0.1` gebunden, also nicht
+> einmal aus dem eigenen Netzwerk erreichbar.
 
 ### Grafikkarte (optional, aber deutlich schneller)
 
@@ -79,14 +87,22 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 ## 3. Wissensdatenbank aufbauen
 
-Einmalig, dauert je nach Rechner 10 bis 20 Minuten. **LM Studio muss dabei laufen.**
+Zuerst die Vektordatenbank starten. Sie läuft als eigener Dienst, damit `ingest.py` und die
+Anwendung gleichzeitig darauf zugreifen können:
+
+```bash
+docker compose up -d
+```
+
+Dann die Wissensdatenbank füllen. Einmalig, dauert je nach Rechner 10 bis 20 Minuten.
+**LM Studio muss dabei laufen.**
 
 ```bash
 python ingest.py
 ```
 
-Das Skript liest alle PDF-Dateien aus `daten/` sowie geprüfte Webseiten ein und legt sie in der
-Vektordatenbank `qdrant_db/` ab. Am Ende steht ein Prüfbericht, der für jedes Dokument zeigt, wie
+Das Skript liest alle PDF-Dateien aus `daten/`, die Paragrafen des SGB XI sowie geprüfte Webseiten
+ein und legt sie in der Vektordatenbank ab. Am Ende steht ein Prüfbericht, der für jedes Dokument zeigt, wie
 viel Text gewonnen wurde – so lässt sich belegen, dass jede Quelle vollständig verarbeitet wurde.
 
 Zum Nachschauen, was in der Datenbank gelandet ist:
@@ -99,35 +115,57 @@ python check_db.py
 
 ## 4. Starten
 
-Zwei Programme, zwei Fenster:
+Drei Dinge müssen laufen: die Vektordatenbank, der Hintergrunddienst und die Oberfläche.
 
 ```bash
-python backend.py
+docker compose up -d
 ```
 
 ```bash
-streamlit run app.py
+.venv\Scripts\python -m uvicorn backend:app --host 127.0.0.1 --port 8000
 ```
 
-Danach im Browser: <http://localhost:8501>
+```bash
+npm run dev --prefix frontend
+```
 
-> Beide Dienste lauschen bewusst **nur örtlich**. Die Pflegeunterlagen sind dadurch nicht aus dem
-> Netzwerk erreichbar.
+Danach im Browser: <http://localhost:5173>
+
+> Alle drei lauschen bewusst **nur örtlich** (`127.0.0.1`). Die Pflegeunterlagen sind dadurch nicht
+> aus dem Netzwerk erreichbar. Der erste Start des Dienstes dauert etwa eine Minute, weil das
+> Modell für die Neubewertung geladen wird.
+
+Zum Beenden:
+
+```bash
+docker compose down
+```
 
 ---
 
 ## 5. Aufbau des Projekts
 
 ```
-app.py            Weboberfläche (Streamlit): vier Reiter, Bedienführung, Fortschrittsanzeige
-backend.py        Dienst für die Sitzungsverwaltung (FastAPI): Zugangscodes, verschlüsselte Ablage
+frontend/         Weboberfläche (React, TypeScript, Vite): vier Reiter, Bedienführung
+  src/api.ts        Anbindung an den Dienst, einschließlich Ereignisstrom für den Chat
+  src/components/   Startseite, Unterlagen, Chat, PDF, Einstellungen
+backend.py        Dienst (FastAPI): Zugangscodes, verschlüsselte Ablage, Schnittstellen
+pflege_service.py Fachlogik zwischen Dienst und Suche: Dokumentenaufbereitung, Antwortstrom
 pflege_rag.py     Suche und Antworterzeugung: hybride Suche, Neubewertung, Belegstellen
-pflege_pdf.py     Erzeugung des Widerspruchsschreibens nach dem Musterbrief der Verbraucherzentrale
-ingest.py         Aufbau der Wissensdatenbank aus daten/ und geprüften Webseiten
+pflege_pdf.py     Erzeugung des Widerspruchsschreibens als Geschäftsbrief nach DIN 5008
+ingest.py         Aufbau der Wissensdatenbank aus daten/, SGB XI und geprüften Webseiten
 main.py           Diagnose auf der Kommandozeile: zeigt Treffer, Bewertungen und Belege
 check_db.py       Übersicht über den Inhalt der Wissensdatenbank
+tests/            Testreihe (pytest): Suche, Textaufbereitung, Briefaufbau
+docker-compose.yml  Vektordatenbank als örtlicher Dienst
 daten/            Fachdokumente für die Wissensdatenbank (amtliche Quellen)
 daten/privat/     Unterlagen einzelner Personen – wird nie versioniert
+```
+
+Die Testreihe läuft ohne LM Studio und ohne Docker:
+
+```bash
+python -m pytest tests/ -q
 ```
 
 ### Wie eine Antwort entsteht
@@ -159,14 +197,21 @@ verbleibenden Module mit Erfundenem.
   tatsächlich entfernt, nicht nur als frei markiert.
 * Sitzungen laufen nach 4 Wochen ab und werden selbsttätig gelöscht; eine Verlängerung um 3 Tage
   ist jederzeit möglich.
-* Die Nutzungsstatistik von Streamlit ist abgeschaltet (`.streamlit/config.toml`).
+* Die Vektordatenbank ist an `127.0.0.1` gebunden und ihre Telemetrie ist abgeschaltet
+  (`docker-compose.yml`). Qdrant verlangt von sich aus **kein** Passwort – ohne diese Bindung wäre
+  sie aus dem gesamten Netzwerk offen.
+* Die Vektoren der hochgeladenen Unterlagen liegen ausschließlich im Arbeitsspeicher und werden
+  nie auf die Festplatte geschrieben.
 
 ---
 
 ## 7. Bekannte Einschränkungen
 
-* Die Vektordatenbank kann **nur von einem Prozess gleichzeitig** geöffnet werden. `ingest.py`,
-  `main.py` und `check_db.py` verlangen deshalb, dass die Weboberfläche beendet ist.
+* Läuft die Vektordatenbank als Docker-Dienst, können alle Werkzeuge gleichzeitig zugreifen.
+  Ohne Docker weicht die Anwendung auf den eingebetteten Betrieb aus; dann darf immer nur ein
+  Programm gleichzeitig laufen (`ingest.py`, `main.py`, `check_db.py` oder der Dienst).
+* Ein Wechsel der Qdrant-Fassung kann den gespeicherten Bestand unlesbar machen. Dann hilft
+  `docker compose down -v`, gefolgt von einem erneuten `python ingest.py`.
 * Die erzeugten Texte sind **Entwürfe**. Sie ersetzen keine Rechtsberatung und müssen vor dem
   Absenden geprüft werden. Der Assistent weist auf Textstellen hin, die er nicht belegen konnte.
 * Antworten ohne Belegstelle werden mit einer Warnung versehen, weil das Sprachmodell in solchen

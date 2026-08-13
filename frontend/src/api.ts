@@ -65,6 +65,7 @@ export interface Briefangaben {
   bescheid_datum: string;
   begruendung: string;
   begruendung_folgt: boolean;
+  anlagen?: string;
   perspektive: Perspektive;
   verhaeltnis: string;
 }
@@ -159,7 +160,7 @@ export interface ChatAnfrage {
 }
 
 export interface ChatMeldung {
-  art: "status" | "suchfrage" | "text" | "ergebnis";
+  art: "status" | "suchfrage" | "text" | "ergebnis" | "fehler";
   text?: string;
   antwort?: string;
   quellen?: Quelle[];
