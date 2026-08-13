@@ -33,7 +33,6 @@ load_dotenv()
 
 st.set_page_config(
     page_title="Pflegehilfe Online",
-    page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -54,7 +53,7 @@ TEXT_FIELDS = [
 SYNCED_STATE_KEYS = [
     *TEXT_FIELDS,
     "messages", "user_documents", "document_names", "last_generated_letter",
-    "last_sources", "font_scale", "high_contrast",
+    "last_sources", "font_scale",
 ]
 
 DEFAULT_STATE = {
@@ -64,7 +63,6 @@ DEFAULT_STATE = {
     "last_generated_letter": "",
     "last_sources": [],
     "font_scale": "Normal",
-    "high_contrast": False,
 }
 
 FONT_SCALES = {"Normal": 18, "Groß": 21, "Sehr groß": 24}
@@ -124,12 +122,11 @@ def parse_datetime(wert) -> Optional[datetime.datetime]:
 # ---------------------------------------------------------------------------
 def inject_css() -> None:
     grundgroesse = FONT_SCALES.get(st.session_state.font_scale, 18)
-    if st.session_state.high_contrast:
-        text, panel, rand, primaer, gedaempft = "#000000", "#FFFFFF", "#000000", "#00293D", "#000000"
-        erfolg, warnung = "#004616", "#6B2E00"
-    else:
-        text, panel, rand, primaer, gedaempft = "#16202A", "#F1F4F7", "#C6D2DC", "#1B4965", "#41525F"
-        erfolg, warnung = "#1B5E20", "#8B4000"
+    # Gemessen auf Weiß: Fließtext 16,5:1, Schaltflächen 9,6:1 - beides weit
+    # über den 7:1, die WCAG auf der strengsten Stufe verlangt. Eine eigene
+    # Hochkontrast-Umschaltung brachte darüber hinaus nichts und wurde entfernt.
+    text, panel, rand, primaer, gedaempft = "#16202A", "#F1F4F7", "#C6D2DC", "#1B4965", "#41525F"
+    erfolg, warnung = "#1B5E20", "#8B4000"
 
     st.markdown(
         f"""
@@ -226,6 +223,20 @@ def inject_css() -> None:
             border-radius: 10px; padding: 1.1rem 1.25rem; margin-bottom: 1rem;
         }}
         .karte h3 {{ margin-top: 0 !important; }}
+
+        /* Die drei Schritte auf der Startseite.
+           Als Raster statt als Streamlit-Spalten: Rasterfelder sind von Haus
+           aus gleich hoch, Spalten richten sich nach ihrem eigenen Inhalt -
+           bei unterschiedlich langen Texten stehen die Kästen sonst
+           verschieden tief. */
+        .schrittkarten {{
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 1rem; margin-bottom: 1rem;
+        }}
+        .schrittkarten .karte {{ margin-bottom: 0; height: 100%; }}
+        @media (max-width: 800px) {{
+            .schrittkarten {{ grid-template-columns: 1fr; }}
+        }}
         .quelle {{
             border-left: 4px solid var(--primaer); background: var(--panel);
             border-radius: 6px; padding: 0.7rem 0.95rem; margin-bottom: 0.7rem;
@@ -440,7 +451,7 @@ def render_kopfzeile() -> None:
     plaketten.append(f'<span class="plakette {klasse}">{text}</span>')
 
     st.markdown(
-        '<div class="kopf"><div class="kopf-titel">⚖️ Pflegehilfe Online</div>'
+        '<div class="kopf"><div class="kopf-titel">Pflegehilfe Online</div>'
         f'<div class="zustand">{"".join(plaketten)}</div></div>',
         unsafe_allow_html=True,
     )
@@ -515,30 +526,28 @@ def render_quellen(quellen: List[dict]) -> None:
 # STARTSEITE
 # ---------------------------------------------------------------------------
 def render_start_page() -> None:
-    st.title("⚖️ Pflegehilfe Online")
+    st.title("Pflegehilfe Online")
     st.markdown(
         "#### Unterstützung beim Widerspruch gegen einen Pflegegradbescheid\n"
         "Dieser Assistent prüft Ihre Pflegeunterlagen und hilft Ihnen, einen begründeten "
-        "Widerspruch zu verfassen. **Eine Anmeldung ist nicht nötig.** Wir fragen weder Ihren "
-        "Namen noch Ihre E-Mail-Adresse ab."
+        "Widerspruch zu verfassen. **Eine Anmeldung ist nicht nötig.**"
     )
 
     st.markdown("##### So läuft es ab")
-    eins, zwei, drei = st.columns(3)
-    for spalte, nummer, titel, text in (
-        (eins, "1", "Unterlagen hochladen",
+    schritte = (
+        ("1", "Unterlagen hochladen",
          "Bescheid, Gutachten, Pflegetagebuch und Arztberichte als PDF."),
-        (zwei, "2", "Prüfen lassen",
+        ("2", "Prüfen lassen",
          "Der Assistent vergleicht das Gutachten mit Ihren Unterlagen."),
-        (drei, "3", "Widerspruch erstellen",
+        ("3", "Widerspruch erstellen",
          "Fertiges Schreiben zum Ausdrucken und Unterschreiben."),
-    ):
-        with spalte:
-            st.markdown(
-                f'<div class="karte"><div class="quelle-art">Schritt {nummer}</div>'
-                f"<h3>{titel}</h3><p>{text}</p></div>",
-                unsafe_allow_html=True,
-            )
+    )
+    karten = "".join(
+        f'<div class="karte"><div class="quelle-art">Schritt {nummer}</div>'
+        f"<h3>{titel}</h3><p>{text}</p></div>"
+        for nummer, titel, text in schritte
+    )
+    st.markdown(f'<div class="schrittkarten">{karten}</div>', unsafe_allow_html=True)
 
     st.divider()
     links, rechts = st.columns(2, gap="large")
@@ -605,7 +614,7 @@ def render_start_page() -> None:
     with eins:
         st.markdown(
             "- Verarbeitung **ausschließlich auf diesem Rechner**\n"
-            "- **Keine Übertragung** an Unternehmen im Internet\n"
+            "- **Keine Weiterverarbeitung** der Daten\n"
             "- Gespeicherte Daten sind **verschlüsselt**"
         )
     with zwei:
@@ -646,7 +655,8 @@ künstlicher Intelligenz verwendet. Auch das Sprachmodell läuft örtlich.
 
 **Wie gespeichert wird**
 
-Ihr Arbeitsstand bleibt nur erhalten, solange Sie Ihren Zugangscode haben. Alles Gespeicherte
+Ihr Arbeitsstand bleibt nur erhalten, solange Sie Ihren Zugangscode haben. Sie finden ihn
+jederzeit im Reiter **Einstellungen** und können ihn sich dort kopieren. Alles Gespeicherte
 ist verschlüsselt; ohne den Code kann niemand darauf zugreifen.
 
 **Wie gelöscht wird**
@@ -654,10 +664,6 @@ ist verschlüsselt; ohne den Code kann niemand darauf zugreifen.
 Spätestens 4 Wochen nach Beginn wird die Sitzung vollständig gelöscht – Gesprächsverlauf,
 Inhalte Ihrer Unterlagen und Ihr Schreiben. Im Reiter **Einstellungen** können Sie jederzeit
 sofort selbst löschen.
-
-**Empfehlung**
-
-Laden Sie nur hoch, was Sie wirklich brauchen.
             """
         )
 
@@ -1127,23 +1133,14 @@ def render_settings_tab() -> None:
 
     st.divider()
     st.subheader("👁️ Darstellung")
-    links, rechts = st.columns(2)
-    with links:
-        auswahl = st.radio(
-            "Schriftgröße", list(FONT_SCALES.keys()),
-            index=list(FONT_SCALES.keys()).index(st.session_state.font_scale), horizontal=True,
-        )
-        if auswahl != st.session_state.font_scale:
-            st.session_state.font_scale = auswahl
-            st.rerun()
-    with rechts:
-        kontrast = st.toggle(
-            "Hoher Kontrast", value=st.session_state.high_contrast,
-            help="Verstärkt Schwarz-Weiß-Kontraste und Umrandungen.",
-        )
-        if kontrast != st.session_state.high_contrast:
-            st.session_state.high_contrast = kontrast
-            st.rerun()
+    auswahl = st.radio(
+        "Schriftgröße", list(FONT_SCALES.keys()),
+        index=list(FONT_SCALES.keys()).index(st.session_state.font_scale), horizontal=True,
+        help="Vergrößert die gesamte Oberfläche, nicht nur den Fließtext.",
+    )
+    if auswahl != st.session_state.font_scale:
+        st.session_state.font_scale = auswahl
+        st.rerun()
 
     st.divider()
     st.subheader("⚙️ Technische Angaben")
