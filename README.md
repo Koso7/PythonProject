@@ -160,7 +160,17 @@ tests/            Testreihe (pytest): Suche, Textaufbereitung, Briefaufbau
 docker-compose.yml  Vektordatenbank als örtlicher Dienst
 daten/            Fachdokumente für die Wissensdatenbank (amtliche Quellen)
 daten/privat/     Unterlagen einzelner Personen – wird nie versioniert
+beispielfall/     erfundener Fall zum Ausprobieren (Bescheid, Gutachten, Tagebuch …)
 ```
+
+### Zum Ausprobieren
+
+Der Ordner `beispielfall/` enthält einen vollständig erfundenen Fall: Bescheid einer
+Muster-Pflegekasse, Gutachten des Medizinischen Dienstes, Pflegetagebuch, ärztlicher
+Befundbericht und ein Auszug aus der Patientenakte. Die fünf Dateien lassen sich im Reiter
+*Unterlagen* hochladen, danach sind alle Aufgaben des Assistenten benutzbar – ohne dass echte
+Gesundheitsdaten nötig sind. Die Dateien gehören **nicht** in `daten/`: Dort steht das
+Fachwissen, das der Assistent zitiert.
 
 Die Testreihe läuft ohne LM Studio und ohne Docker:
 

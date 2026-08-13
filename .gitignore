@@ -21,11 +21,20 @@ ingest_log.txt
 # Virtuelle Umgebung
 .venv/
 
+# Einstellungen der Entwicklungsumgebung: an den jeweiligen Rechner gebunden
+.idea/
+.vscode/
+
 # Der Ordner daten/ gehört ins Repository: Ohne die Fachdokumente lässt sich
 # die Wissensdatenbank bei einer frischen Installation nicht aufbauen.
 #
 # Unterlagen einzelner Personen gehören dort NICHT hinein. Für solche Dateien
 # ist daten/privat/ vorgesehen - dieser Ordner wird nie mitversioniert.
+#
+# Der erfundene Beispielfall steht bewusst außerhalb von daten/ (im Ordner
+# beispielfall/): Er gehört zum Ausprobieren hochgeladen, nicht in die
+# Wissensbasis. Lägen die Dateien in daten/, würde ein späterer Wechsel von
+# os.listdir() auf eine rekursive Suche sie stillschweigend mit einlesen.
 daten/privat/
 
 # Lokal erzeugte ONNX-Modelle fuer den Betrieb auf der Grafikkarte (mehrere GB)
