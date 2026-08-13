@@ -166,15 +166,13 @@ class ChatRequest(BaseModel):
     """Eine Frage an den Assistenten.
 
     Entweder ``aktion`` (eine der vorbereiteten Aufgaben) oder ``frage``
-    (freie Eingabe). Die Perspektive bestimmt, ob der Widerspruch in der
-    Ich-Form oder für eine andere Person geschrieben wird.
+    (freie Eingabe). ``versicherte_name`` geht in die Stilvorgabe ein: Der
+    Text benennt die betroffene Person, statt von "ich" oder "Ihnen" zu reden.
     """
 
     aktion: Optional[str] = None
     frage: Optional[str] = None
-    perspektive: str = "selbst"
     versicherte_name: str = ""
-    verhaeltnis: str = ""
 
 
 class ActionModel(BaseModel):
@@ -182,7 +180,7 @@ class ActionModel(BaseModel):
     titel: str
     beschreibung: str
     nutzertext: str
-    braucht_perspektive: bool
+    braucht_stilvorgabe: bool
 
 
 class StatusResponse(BaseModel):
@@ -208,8 +206,6 @@ class LetterRequest(BaseModel):
     bescheid_datum: str = ""
     begruendung: str = ""
     begruendung_folgt: bool = False
-    perspektive: str = "selbst"
-    verhaeltnis: str = ""
     # Beigefügte Unterlagen, eine je Zeile. Optional.
     anlagen: str = ""
 
@@ -485,7 +481,7 @@ def list_actions():
     return [
         ActionModel(
             schluessel=a.schluessel, titel=a.titel, beschreibung=a.beschreibung,
-            nutzertext=a.nutzertext, braucht_perspektive=a.braucht_perspektive,
+            nutzertext=a.nutzertext, braucht_stilvorgabe=a.braucht_stilvorgabe,
         )
         for a in pflege_rag.QUICK_ACTIONS
     ]
@@ -554,11 +550,7 @@ def chat(token: str, anfrage: ChatRequest, db: DbSession = Depends(get_db)):
     verlauf = list(daten.get("messages", []) or [])
 
     aktion = pflege_rag.QUICK_ACTION_BY_KEY.get(anfrage.aktion or "")
-    person = pflege_rag.Antragsteller(
-        perspektive=anfrage.perspektive,
-        versicherte_name=anfrage.versicherte_name,
-        verhaeltnis=anfrage.verhaeltnis,
-    )
+    person = pflege_rag.Antragsteller(versicherte_name=anfrage.versicherte_name)
     if aktion is not None:
         anzeige, anweisung = aktion.nutzertext, aktion.render(person)
         zusatzfragen = aktion.zusatzfragen

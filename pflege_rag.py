@@ -1113,54 +1113,46 @@ def stream_answer(llm, messages: Sequence[dict]) -> Iterator[str]:
 # ---------------------------------------------------------------------------
 # SCHNELLAKTIONEN IM CHAT
 # ---------------------------------------------------------------------------
-SELBST = "selbst"
-ANGEHOERIGE = "angehoerige"
-
-
 @dataclass
 class Antragsteller:
-    """Wer den Widerspruch einlegt - das bestimmt die Perspektive des Textes.
+    """Die pflegebedürftige Person, um die es im Widerspruch geht.
 
-    Legt die betroffene Person selbst Widerspruch ein, wird in der Ich-Form
-    geschrieben. Tut es eine angehörige Person, wird über die betroffene Person
-    in der dritten Person geschrieben ("meine Mutter, Frau Müller").
+    Wer den Widerspruch einlegt, kommt im Text bewusst nicht vor: Der Brief ist
+    durchgehend unpersönlich formuliert. Dadurch ist derselbe Text richtig,
+    gleichgültig ob die betroffene Person ihn selbst schreibt oder jemand
+    anderes für sie - niemand muss ihn an die eigene Rolle anpassen.
     """
 
-    perspektive: str = SELBST
     versicherte_name: str = ""
-    verhaeltnis: str = ""  # etwa "Tochter", "Sohn", "Ehefrau", "Bevollmächtigter"
-
-    @property
-    def schreibt_selbst(self) -> bool:
-        return self.perspektive != ANGEHOERIGE
-
-    @property
-    def anrede_versicherte(self) -> str:
-        """Wie die betroffene Person im Brief benannt wird."""
-        if self.schreibt_selbst:
-            return "ich"
-        name = self.versicherte_name.strip()
-        if self.verhaeltnis.strip() and name:
-            return f"meine {self.verhaeltnis.strip()}, {name}"
-        return name or "die versicherte Person"
 
     def prompt_hinweis(self) -> str:
-        """Anweisung an das Sprachmodell zur richtigen Perspektive."""
-        if self.schreibt_selbst:
-            return (
-                "PERSPEKTIVE: Die betroffene Person schreibt selbst. Formuliere durchgehend in der "
-                "Ich-Form ('ich benötige Unterstützung', 'bei mir wurde festgestellt'). "
-                "Sprich niemals von 'der Patientin', 'der Versicherten' oder 'der Mandantin'."
-            )
-        bezeichnung = self.anrede_versicherte
-        name = self.versicherte_name.strip() or "die versicherte Person"
+        """Anweisung an das Sprachmodell zum unpersönlichen Stil.
+
+        Das Modell verfällt sonst von selbst in die Ich-Form oder redet die
+        Kasse mit "Sie" an; beides legt fest, wer schreibt.
+        """
+        name = self.versicherte_name.strip()
+        benennung = (
+            f"Nenne die betroffene Person beim Namen: „{name} benötigt Unterstützung“, "
+            f"„bei {name} wurde festgestellt“."
+            if name
+            else "Bezeichne die betroffene Person durchgehend als „die pflegebedürftige Person“."
+        )
         return (
-            f"PERSPEKTIVE: Der Widerspruch wird für eine andere Person eingelegt. Der Schreiber ist "
-            f"angehörig; die betroffene Person ist {bezeichnung}. Schreibe über sie in der dritten "
-            f"Person ('{name} benötigt Unterstützung', 'bei ihr wurde festgestellt') und über dich "
-            f"selbst in der Ich-Form ('ich habe beobachtet', 'ich übernehme die Pflege'). "
-            f"Sprich niemals von 'der Patientin', 'der Mandantin' oder 'der Versicherten' – "
-            f"verwende den Namen oder das Verwandtschaftsverhältnis."
+            "STIL – verbindlich:\n"
+            "- Schreibe durchgehend unpersönlich. Wer den Widerspruch einlegt, kommt im Text "
+            "nicht vor.\n"
+            "- VERBOTENE WÖRTER, ausnahmslos: ich, mir, mich, mein, meine, wir, uns, unser, "
+            "unsere, Sie, Ihnen, Ihr, Ihre. Auch nicht in Nebensätzen.\n"
+            "- Die Pflegekasse wird NICHT angesprochen. Schreibe über sie in der dritten Person "
+            "oder im Passiv: „Mit Bescheid vom … wurde … eingestuft“ – NIEMALS „Mit Schreiben "
+            "vom … haben Sie … eingestuft“. „Es wird um erneute Begutachtung gebeten“ – "
+            "NIEMALS „ich bitte Sie“.\n"
+            "- Keine Meinungsfloskeln wie „unserer Meinung nach“ oder „aus unserer Sicht“. "
+            "Schreibe die Feststellung ohne sie.\n"
+            f"- {benennung}\n"
+            "- Schreibe nie „meine Mutter“, „mein Vater“ oder ein anderes Verwandtschaftsverhältnis "
+            "und nie „die Patientin“, „die Mandantin“ oder „die Versicherte“."
         )
 
 
@@ -1192,11 +1184,13 @@ class QuickAction:
     nutzertext: str
     prompt: str
     zusatzfragen: Tuple[str, ...] = ()
-    braucht_perspektive: bool = False
+    # Ob der Aufgabe die Stilvorgabe vorangestellt wird. Nötig überall dort,
+    # wo Text entsteht, der später im Brief landet oder wie Brieftext klingt.
+    braucht_stilvorgabe: bool = False
 
     def render(self, antragsteller: Optional[Antragsteller] = None) -> str:
-        """Setzt die Perspektive in den Auftrag ein."""
-        if not self.braucht_perspektive:
+        """Stellt dem Auftrag die Stilvorgabe voran."""
+        if not self.braucht_stilvorgabe:
             return self.prompt
         person = antragsteller or Antragsteller()
         return f"{person.prompt_hinweis()}\n\n{self.prompt}"
@@ -1240,41 +1234,41 @@ QUICK_ACTIONS: Tuple[QuickAction, ...] = (
             "- Beziehe dich ausschließlich auf Dokumente, die in den Abschnitten tatsächlich als Herkunft "
             "genannt sind. Gehe NICHT davon aus, dass ein Pflegetagebuch, ein Arztbericht oder sonst ein "
             "Dokument vorliegt, wenn es dort nicht auftaucht.\n"
-            "- Fehlt zu einem Modul eine Angabe, schreibe „Dazu finde ich in den Unterlagen keine Angabe“ "
+            "- Fehlt zu einem Modul eine Angabe, schreibe „Dazu findet sich in den Unterlagen keine Angabe“ "
             "und gehe weiter. Erfinde weder Feststellungen noch Punktzahlen.\n"
             "- Schließe mit einer Einschätzung, bei welchen Modulen ein Widerspruch am aussichtsreichsten "
             "ist, und nenne, welche Nachweise dafür noch fehlen."
             + FACHWISSEN_AUFLAGE
         ),
         zusatzfragen=tuple(MODULE_QUERIES),
-        braucht_perspektive=True,
+        braucht_stilvorgabe=True,
     ),
     QuickAction(
         schluessel="argumente",
         titel="Argumente sammeln",
         beschreibung="Stellt die belegbaren Argumente für den Widerspruch zusammen, sortiert nach Überzeugungskraft.",
-        nutzertext="Bitte sammle die begründeten Argumente für meinen Widerspruch.",
+        nutzertext="Bitte sammle die begründeten Argumente für den Widerspruch.",
         prompt=(
-            "Stelle die belegbaren Argumente für meinen Widerspruch zusammen.\n\n"
+            "Stelle die belegbaren Argumente für den Widerspruch zusammen.\n\n"
             "Schreibe für jedes Argument:\n"
             "- **Betroffenes Modul**\n"
             "- **Feststellung des Medizinischen Dienstes** (mit Abschnittsnummer)\n"
-            "- **Gegenbeleg aus meinen Unterlagen** (mit Abschnittsnummer)\n"
+            "- **Gegenbeleg aus den vorliegenden Unterlagen** (mit Abschnittsnummer)\n"
             "- **Warum die Einschätzung damit nicht haltbar ist**\n"
             "- **Einschätzung der Erfolgsaussicht:** hoch / mittel / gering\n\n"
             "Sortiere nach Erfolgsaussicht, das stärkste Argument zuerst. Nimm nur Argumente auf, die du "
-            "tatsächlich mit einem Abschnitt belegen kannst. Nenne am Ende, welche Nachweise mir noch fehlen "
-            "und welche ich nachreichen sollte."
+            "tatsächlich mit einem Abschnitt belegen kannst. Nenne am Ende, welche Nachweise noch fehlen "
+            "und nachgereicht werden sollten."
             + FACHWISSEN_AUFLAGE
         ),
         zusatzfragen=tuple(MODULE_QUERIES),
-        braucht_perspektive=True,
+        braucht_stilvorgabe=True,
     ),
     QuickAction(
         schluessel="schreiben",
         titel="Widerspruch schreiben",
         beschreibung="Verfasst die Begründung für das Widerspruchsschreiben, fertig zur Übernahme in das PDF.",
-        nutzertext="Bitte verfasse die Begründung für mein Widerspruchsschreiben.",
+        nutzertext="Bitte verfasse die Begründung für das Widerspruchsschreiben.",
         prompt=(
             "Verfasse den Text eines Widerspruchsschreibens an die Pflegekasse. Es soll sich lesen wie "
             "ein Brief, den ein Mensch geschrieben hat – nicht wie eine Aufzählung von Argumenten.\n\n"
@@ -1312,7 +1306,7 @@ QUICK_ACTIONS: Tuple[QuickAction, ...] = (
             "(etwa: „nach den Begutachtungs-Richtlinien ist hier ... zu bewerten“)."
         ),
         zusatzfragen=tuple(MODULE_QUERIES),
-        braucht_perspektive=True,
+        braucht_stilvorgabe=True,
     ),
 )
 

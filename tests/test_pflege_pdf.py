@@ -196,7 +196,7 @@ class TestBuildLetterPdf:
         "erwartet",
         ["Michaela", "Pflegekasse bei der Musterkrankenkasse", "Widerspruch",
          "AZ-2026/4711", "14.03.2026", "A123456789",
-         "Eingang dieses Widerspruchs", "Begründung"],
+         "Bestätigung des Eingangs", "Begründung"],
     )
     def test_enthaelt_alle_pflichtbestandteile(self, vollstaendige_daten, tmp_path, erwartet):
         assert erwartet in _pdf_text(vollstaendige_daten, tmp_path)
@@ -212,11 +212,11 @@ class TestBuildLetterPdf:
     def test_widerspruch_steht_im_satz_und_nicht_allein(self, vollstaendige_daten, tmp_path):
         """Das hervorgehobene Wort gehört in den Satz.
 
-        Stand es zentriert auf einer eigenen Zeile, hing das abschließende
-        "ein." allein in der nächsten Zeile und wirkte wie ein Satzfehler.
+        Stand es zentriert auf einer eigenen Zeile, hing das abschließende Wort
+        allein in der nächsten Zeile und wirkte wie ein Satzfehler.
         """
         text = " ".join(_pdf_text(vollstaendige_daten, tmp_path).split())
-        assert "form- und fristgerecht Widerspruch ein." in text
+        assert "form- und fristgerecht Widerspruch eingelegt." in text
 
     def test_anlagen_erscheinen_unter_der_unterschrift(self, vollstaendige_daten, tmp_path):
         vollstaendige_daten.anlagen = "Kopie des Bescheids\n- Pflegetagebuch\n\n"
@@ -263,42 +263,104 @@ class TestBuildLetterPdf:
 
 
 # ---------------------------------------------------------------------------
-# PERSPEKTIVE
+# UNPERSÖNLICHE FORMULIERUNG
 # ---------------------------------------------------------------------------
-class TestPerspektive:
-    """Wer den Widerspruch einlegt, bestimmt die Formulierung."""
+class TestNeutraleFormulierung:
+    """Der Brief legt nicht fest, wer ihn schreibt.
 
-    def _angehoerige(self) -> pdf.LetterData:
-        return pdf.LetterData(
+    Frühere Fassungen kannten eine wählbare Perspektive: Ich-Form für die
+    betroffene Person, dritte Person für Angehörige. Das war eine Entscheidung,
+    die niemand treffen wollte, und erzeugte zwei Textfassungen mit doppeltem
+    Fehlerpotenzial. Jetzt gibt es nur eine, unpersönliche Fassung - sie stimmt
+    für beide Fälle.
+    """
+
+    def _daten(self, **zusatz) -> pdf.LetterData:
+        werte = dict(
             absender_name="Sabine Müller", absender_strasse="Musterweg 1",
             absender_plz_ort="99999 Musterstadt", kasse_name="Muster-Pflegekasse",
-            bescheid_datum="12.03.2025", begruendung="Der Hilfebedarf wurde zu niedrig bewertet.",
-            perspektive=pdf.ANGEHOERIGE, versichert_name="Elfriede Müller",
-            verhaeltnis="Mutter",
+            bescheid_datum="12.03.2025",
+            begruendung="Der Hilfebedarf wurde zu niedrig bewertet.",
+            versichert_name="Elfriede Müller",
         )
+        werte.update(zusatz)
+        return pdf.LetterData(**werte)
 
-    def test_eigenantrag_schreibt_in_der_ich_form(self):
-        daten = pdf.LetterData(bescheid_datum="12.03.2025")
-        assert daten.einleitungssatz.startswith("hiermit lege ich gegen den Bescheid")
-        assert "für" not in daten.einleitungssatz
+    def test_einleitung_nennt_die_betroffene_person_ohne_verhaeltnis(self):
+        satz = self._daten().einleitungssatz
+        assert "für Elfriede Müller" in satz
+        assert satz.startswith("hiermit wird")
+        assert "eingelegt." in satz
 
-    def test_angehoerige_nennt_person_und_verhaeltnis(self):
-        satz = self._angehoerige().einleitungssatz
-        assert "für meine Mutter, Elfriede Müller," in satz
+    @pytest.mark.parametrize(
+        "wort", ["ich ", "meine ", "mein ", " mir ", " uns ", "Mandantin", "Patientin"]
+    )
+    def test_kein_persoenliches_wort_im_brief(self, wort, tmp_path):
+        text = " ".join(_pdf_text(self._daten(), tmp_path).split())
+        assert wort.lower() not in text.lower(), f"„{wort.strip()}“ steht im Brief"
 
-    def test_unterschriftshinweis_richtet_sich_nach_der_rolle(self):
-        assert "pflegebedürftigen Person" in pdf.LetterData().unterschrift_hinweis
-        assert "bevollmächtigten" in self._angehoerige().unterschrift_hinweis
+    def test_schlusssatz_redet_die_kasse_nicht_mit_sie_an(self, tmp_path):
+        text = _pdf_text(self._daten(), tmp_path)
+        assert "Um eine Bestätigung des Eingangs wird gebeten." in text
+        assert "bestätigen Sie" not in text
 
-    def test_angehoerige_brauchen_den_namen_der_betroffenen(self):
-        daten = self._angehoerige()
-        daten.versichert_name = ""
-        assert "Der Name der pflegebedürftigen Person" in pdf.validate(daten)
+    def test_fristwahrende_variante_ist_ebenfalls_unpersoenlich(self, tmp_path):
+        daten = self._daten(begruendung="", begruendung_folgt=True)
+        text = _pdf_text(daten, tmp_path)
+        assert "wird in Kürze nachgereicht" in text
+        assert "reiche ich" not in text
+
+    def test_unterschriftshinweis_legt_die_rolle_nicht_fest(self):
+        hinweis = pdf.LetterData().unterschrift_hinweis
+        assert hinweis == "(eigenhändige Unterschrift)"
+
+    def test_ohne_namen_der_betroffenen_gilt_der_absender(self):
+        daten = self._daten(versichert_name="")
+        assert daten.name_versicherte == "Sabine Müller"
+        # Der Brief bleibt vollständig - der Name ist keine Pflichtangabe mehr.
+        assert pdf.validate(daten) == []
 
     def test_pdf_nennt_die_betroffene_person(self, tmp_path):
-        text = _pdf_text(self._angehoerige(), tmp_path)
+        text = _pdf_text(self._daten(), tmp_path)
         assert "Elfriede Müller" in text
         assert "Versicherte Person" in text
+
+
+# ---------------------------------------------------------------------------
+# ORT DER DATUMSZEILE
+# ---------------------------------------------------------------------------
+class TestOrtszeile:
+    """Der Ort muss nicht zweimal eingetippt werden."""
+
+    def test_leeres_feld_nimmt_den_ort_aus_der_anschrift(self):
+        daten = pdf.LetterData(absender_plz_ort="30159 Hannover")
+        assert daten.ortszeile == "Hannover"
+
+    def test_eigene_angabe_hat_vorrang(self):
+        daten = pdf.LetterData(absender_plz_ort="30159 Hannover", ort="Berlin")
+        assert daten.ortszeile == "Berlin"
+
+    @pytest.mark.parametrize(
+        "anschrift,erwartet",
+        [
+            ("30159 Hannover", "Hannover"),
+            ("1010 Wien", "Wien"),                      # vierstellig (AT/CH)
+            ("99999 Bad Neuenahr-Ahrweiler", "Bad Neuenahr-Ahrweiler"),
+            ("60313 Frankfurt am Main", "Frankfurt am Main"),
+            ("Hannover", "Hannover"),                   # ganz ohne Postleitzahl
+            ("", ""),
+        ],
+    )
+    def test_postleitzahl_wird_abgeschnitten(self, anschrift, erwartet):
+        assert pdf.LetterData(absender_plz_ort=anschrift).ortszeile == erwartet
+
+    def test_ort_erscheint_in_der_datumszeile_des_pdf(self, tmp_path):
+        daten = pdf.LetterData(
+            absender_name="Max Muster", absender_strasse="Weg 2",
+            absender_plz_ort="20095 Hamburg", kasse_name="Kasse",
+            bescheid_datum="01.02.2026", begruendung="Zur Probe.",
+        )
+        assert "Hamburg, den" in _pdf_text(daten, tmp_path)
 
 
 class TestDin5008:
@@ -366,3 +428,121 @@ class TestStripContextHeaders:
     def test_beginnt_nach_entfernter_anrede_gross(self):
         roh = "Sehr geehrte Damen und Herren,\n\nmit Schreiben vom 12.03.2025 haben Sie entschieden."
         assert pdf.prepare_begruendung(roh).startswith("Mit Schreiben")
+
+
+# ---------------------------------------------------------------------------
+# PERSÖNLICHE FORMULIERUNGEN
+# ---------------------------------------------------------------------------
+class TestMeinungsfloskeln:
+    """Floskeln, die nur den Schreiber markieren, werden gestrichen.
+
+    Ihr Wegfall ändert die Aussage nicht - anders als eine Umformung von
+    "haben Sie ... eingestuft" ins Passiv, die eine Rate über Ein- oder
+    Mehrzahl verlangt und deshalb bewusst unterbleibt.
+    """
+
+    @pytest.mark.parametrize(
+        "eingabe, erwartet",
+        [
+            ("Der Bedarf wurde unserer Meinung nach nicht erfasst.",
+             "Der Bedarf wurde nicht erfasst."),
+            ("Der Bedarf wurde meiner Ansicht nach nicht erfasst.",
+             "Der Bedarf wurde nicht erfasst."),
+            ("Aus unserer Sicht ist die Bewertung zu niedrig.",
+             "Ist die Bewertung zu niedrig."),
+            ("Die Einstufung ist, wie wir meinen, nicht haltbar.",
+             "Die Einstufung ist nicht haltbar."),
+        ],
+    )
+    def test_streicht_floskeln(self, eingabe, erwartet):
+        ergebnis = pdf.strip_meinungsfloskeln(eingabe).strip()
+        # Groß-/Kleinschreibung am Satzanfang regelt prepare_begruendung.
+        assert ergebnis[:1].upper() + ergebnis[1:] == erwartet
+
+    def test_laesst_sachtext_unangetastet(self):
+        text = "Im Modul 4 wurde die tägliche Hilfe beim Duschen nicht berücksichtigt."
+        assert pdf.strip_meinungsfloskeln(text) == text
+
+    def test_prepare_begruendung_streicht_sie_mit(self):
+        roh = "Der Hilfebedarf wurde unserer Meinung nach zu niedrig bewertet."
+        assert "unserer Meinung" not in pdf.prepare_begruendung(roh)
+
+
+class TestFindPersonalWording:
+    """Was nicht gefahrlos umschreibbar ist, muss wenigstens auffallen."""
+
+    @pytest.mark.parametrize(
+        "text, erwartet",
+        [
+            ("Mit Schreiben vom 12.03.2025 haben Sie sie eingestuft.", "Sie"),
+            ("Ich lege Widerspruch ein.", "Ich"),
+            ("Meine Mutter benötigt Hilfe.", "Meine"),
+            ("Wir bitten um erneute Begutachtung.", "Wir"),
+            ("Bitte prüfen Sie Ihre Unterlagen.", "Sie"),
+        ],
+    )
+    def test_erkennt_persoenliche_woerter(self, text, erwartet):
+        assert erwartet in pdf.find_personal_wording(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Mit Bescheid vom 12.03.2025 wurde Elfriede Müller eingestuft.",
+            "Es wird um eine erneute Begutachtung gebeten.",
+            "Nach den Begutachtungs-Richtlinien ist eine höhere Bewertung angezeigt.",
+            "Der Hilfebedarf beim Duschen wurde nicht berücksichtigt.",
+        ],
+    )
+    def test_meldet_bei_neutralem_text_nichts(self, text):
+        assert pdf.find_personal_wording(text) == []
+
+    def test_meldet_jedes_wort_nur_einmal(self):
+        text = "ich schreibe, weil ich betroffen bin, und ich bitte darum."
+        assert pdf.find_personal_wording(text).count("ich") == 1
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Sie benötigt beim Duschen Hilfe.",          # Satzanfang: die Person
+            "Ihr Gang ist unsicher.",                     # Satzanfang: ihr Gang
+        ],
+    )
+    def test_kleingeschriebenes_sie_ist_kein_verstoss(self, text):
+        """„sie benötigt Hilfe“ meint die betroffene Person und ist richtig.
+
+        Am Satzanfang steht es großgeschrieben und lässt sich nicht von der
+        Höflichkeitsanrede unterscheiden - dieser Fehlalarm wird bewusst in
+        Kauf genommen, weil er selten ist. Mitten im Satz darf er nicht
+        auftreten, sonst warnte fast jeder Brief grundlos.
+        """
+        mitten_im_satz = "Der Bericht zeigt: " + text[0].lower() + text[1:]
+        assert pdf.find_personal_wording(mitten_im_satz) == []
+
+
+class TestStripWarnbanner:
+    """Der Warnbanner ist Beiwerk der Anzeige, kein Briefinhalt.
+
+    Belegt am 2026-08-13: Eine Antwort ohne Belegstelle bekommt den Banner
+    vorangestellt. Er landete dadurch im Briefentwurf - und weil die Anrede
+    danach nicht mehr am Textanfang stand, blieb auch sie stehen.
+    """
+
+    BANNER = (
+        "> ⚠️ **Diese Antwort stützt sich auf keine Textstelle** aus Ihren Unterlagen. "
+        "Bitte prüfen Sie sie nach.\n\n"
+    )
+
+    def test_entfernt_den_banner(self):
+        assert pdf.strip_warnbanner(self.BANNER + "Der Inhalt.") == "Der Inhalt."
+
+    def test_anrede_wird_danach_wieder_erkannt(self):
+        roh = self.BANNER + "Sehr geehrte Damen und Herren,\n\nDer Inhalt.\n\nMit freundlichen Grüßen"
+        fertig = pdf.prepare_begruendung(roh)
+        assert "Sehr geehrte" not in fertig
+        assert "Grüßen" not in fertig
+        assert "prüfen Sie" not in fertig
+        assert fertig == "Der Inhalt."
+
+    def test_laesst_fliesstext_unangetastet(self):
+        text = "Im Modul 4 wurde der Hilfebedarf beim Duschen nicht berücksichtigt."
+        assert pdf.strip_warnbanner(text) == text

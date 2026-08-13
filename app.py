@@ -45,7 +45,7 @@ MAX_DOCUMENTS = 15
 SESSION_DAYS = 28
 
 TEXT_FIELDS = [
-    "absender_name", "absender_strasse", "absender_plz_ort", "absender_ort",
+    "absender_name", "absender_strasse", "absender_plz_ort",
     "kasse_name", "kasse_strasse", "kasse_plz_ort",
     "versichert_name", "versichert_nr", "aktenzeichen", "bescheid_datum",
     "letter_text",
@@ -957,10 +957,8 @@ def render_pdf_tab() -> None:
         st.markdown("**Absender – Ihre Anschrift**")
         feld("Ihr Vor- und Nachname", "absender_name", platzhalter="Michaela Muster")
         feld("Ihre Straße und Hausnummer", "absender_strasse", platzhalter="Musterweg 1")
-        feld("Ihre Postleitzahl und Ihr Ort", "absender_plz_ort", platzhalter="99999 Musterstadt")
-        feld("Ort für die Datumszeile", "absender_ort",
-             hilfe="Erscheint oben rechts vor dem Datum. Kann leer bleiben.",
-             platzhalter="Musterstadt")
+        feld("Ihre Postleitzahl und Ihr Ort", "absender_plz_ort", platzhalter="99999 Musterstadt",
+             hilfe="Der Ort erscheint auch oben rechts in der Datumszeile.")
     with rechts:
         st.markdown("**Empfänger – Ihre Pflegekasse**")
         feld("Name der Pflegekasse", "kasse_name", platzhalter="Pflegekasse bei der Musterkrankenkasse")
@@ -1014,6 +1012,21 @@ def render_pdf_tab() -> None:
             icon="✏️",
         )
 
+    # Der Brief soll nicht verraten, wer ihn schreibt. Das Sprachmodell hält
+    # sich nicht immer daran; automatisch umschreiben lässt sich das nicht
+    # gefahrlos, deshalb hier ein Hinweis mit den konkreten Wörtern.
+    persoenlich = pflege_pdf.find_personal_wording(get_field("letter_text"))
+    if persoenlich:
+        st.warning(
+            "**Im Text stehen persönliche Wörter.** Das Schreiben ist bewusst neutral gehalten, "
+            "damit es unverändert passt – ganz gleich, ob die pflegebedürftige Person es selbst "
+            "abschickt oder jemand anderes für sie. Gefunden wurde: "
+            + ", ".join(f"`{wort}`" for wort in persoenlich[:8])
+            + ".\n\nBeispiel: statt „Mit Schreiben vom … haben Sie … eingestuft“ besser "
+            "„Mit Bescheid vom … wurde … eingestuft“.",
+            icon="✏️",
+        )
+
     fristwahrend = st.checkbox(
         "Begründung später nachreichen (Widerspruch zunächst nur fristwahrend einlegen)",
         help="Wahrt die Frist. Im Schreiben steht dann, dass die Begründung in Kürze folgt.",
@@ -1035,7 +1048,8 @@ def render_pdf_tab() -> None:
         bescheid_datum=get_field("bescheid_datum"),
         begruendung=get_field("letter_text"),
         begruendung_folgt=fristwahrend,
-        ort=get_field("absender_ort"),
+        # ort bleibt leer: Die Briefvorlage nimmt dann den Ort aus der
+        # Absenderanschrift. Ihn zweimal einzutippen war unnötige Arbeit.
     )
 
     fehlend = pflege_pdf.validate(daten)

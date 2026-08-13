@@ -177,14 +177,85 @@ def strip_context_headers(text: str) -> str:
     return text.strip()
 
 
+# ---------------------------------------------------------------------------
+# UNPERSÖNLICHE FORMULIERUNG
+# ---------------------------------------------------------------------------
+# Der Brief soll nicht verraten, wer ihn schreibt. Das Sprachmodell hält sich
+# nicht zuverlässig daran - im Test blieb "haben Sie ... eingestuft" stehen.
+#
+# Zwei Stufen, weil nicht alles gefahrlos umschreibbar ist:
+#   1. Reine Meinungsfloskeln werden gestrichen. Ihr Wegfall ändert die Aussage
+#      nicht, deshalb ist die Ersetzung ungefährlich.
+#   2. Alles Übrige wird nur GEMELDET. Aus "haben Sie die Module nicht
+#      berücksichtigt" ein grammatisch richtiges Passiv zu machen, verlangt zu
+#      wissen, ob der Gegenstand Ein- oder Mehrzahl ist ("wurde"/"wurden") -
+#      eine falsche Rate hinterließe einen Grammatikfehler im Behördenbrief.
+#      Lieber ein sichtbarer Hinweis als ein stiller Schaden.
+_MEINUNGSFLOSKELN = (
+    re.compile(r"\s*,?\s*(?:unserer|meiner)\s+(?:Meinung|Ansicht|Auffassung)\s+nach\s*,?", re.I),
+    re.compile(r"\s*,?\s*(?:aus|nach)\s+(?:unserer|meiner)\s+Sicht\s*,?", re.I),
+    re.compile(r"\s*,?\s*wie\s+(?:wir|ich)\s+(?:meinen|finde[n]?|denke[n]?)\s*,?", re.I),
+)
+
+# Erste Person: Schreibung egal, "Ich" am Satzanfang zählt genauso.
+_ICH_WIR_RE = re.compile(r"\b(ich|mir|mich|mein\w*|wir|uns|unser\w*)\b", re.IGNORECASE)
+# Höflichkeitsanrede: NUR großgeschrieben. Kleingeschriebenes "sie" und "ihr"
+# meinen die betroffene Person ("sie benötigt Hilfe") und sind völlig richtig -
+# würde man beides melden, käme bei fast jedem Brief eine Warnung, die keine
+# ist, und niemand nähme sie mehr ernst.
+_ANREDE_RE = re.compile(r"\b(Sie|Ihnen|Ihre\w*|Ihr)\b")
+
+
+# Hinweise an die ratsuchende Person stehen als Zitatblock ("> ..."). Sie sind
+# Beiwerk der Anzeige und dürfen nie im Brief an die Pflegekasse auftauchen.
+# Fließtext eines Widerspruchs beginnt keine Zeile mit ">".
+_WARNBANNER_RE = re.compile(r"^[ \t]*>[^\n]*\n?", re.MULTILINE)
+
+
+def strip_warnbanner(text: str) -> str:
+    """Entfernt Hinweisblöcke, die nur für die Anzeige gedacht sind."""
+    return _WARNBANNER_RE.sub("", text or "").lstrip("\n ")
+
+
+def strip_meinungsfloskeln(text: str) -> str:
+    """Entfernt Wendungen, die nur eine Meinung markieren.
+
+    "Der Bedarf wurde unserer Meinung nach nicht erfasst" wird zu "Der Bedarf
+    wurde nicht erfasst" - die Aussage bleibt, der Schreiber verschwindet.
+    """
+    for muster in _MEINUNGSFLOSKELN:
+        text = muster.sub(" ", text)
+    # Doppelte Leerzeichen und Leerzeichen vor Satzzeichen aufräumen.
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return re.sub(r"\s+([,.;:!?])", r"\1", text)
+
+
+def find_personal_wording(text: str) -> list[str]:
+    """Meldet Wörter, die verraten, wer den Brief schreibt.
+
+    Ergebnis ist die Liste der gefundenen Wörter in der Reihenfolge ihres
+    ersten Auftretens, damit die Oberfläche sie benennen kann.
+    """
+    gefunden: list[str] = []
+    for muster in (_ICH_WIR_RE, _ANREDE_RE):
+        for treffer in muster.finditer(text or ""):
+            wort = treffer.group(0)
+            if wort not in gefunden:
+                gefunden.append(wort)
+    return gefunden
+
+
 def prepare_begruendung(text: str) -> str:
     """Bereitet einen Chat-Text als Begründung für den Brief auf.
 
-    Die Trennzeilen werden zuerst entfernt: Stünde davor noch eine, läge die
-    Anrede nicht mehr am Textanfang und bliebe unerkannt stehen.
+    Warnbanner und Trennzeilen werden zuerst entfernt: Stünde davor noch eines
+    von beiden, läge die Anrede nicht mehr am Textanfang und bliebe unerkannt
+    stehen. Genau das ist passiert, als eine Antwort ohne Belegstelle den
+    Warnbanner vorangestellt bekam - Anrede und Warntext landeten im Brief.
     """
-    ohne_technik = strip_context_headers(text or "")
-    fertig = strip_letter_boilerplate(strip_citations(strip_markdown(ohne_technik))).strip()
+    ohne_technik = strip_warnbanner(strip_context_headers(text or ""))
+    fertig = strip_letter_boilerplate(strip_citations(strip_markdown(ohne_technik)))
+    fertig = strip_meinungsfloskeln(fertig).strip()
     # Nach dem Entfernen der Anrede beginnt der Text oft klein ("mit Schreiben
     # vom ..."), weil er als Fortsetzung der Anrede gedacht war.
     return fertig[:1].upper() + fertig[1:] if fertig else ""
@@ -206,13 +277,16 @@ def find_placeholders(text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # BRIEFDATEN
 # ---------------------------------------------------------------------------
-SELBST = "selbst"
-ANGEHOERIGE = "angehoerige"
-
-
 @dataclass
 class LetterData:
-    """Alle Angaben, die im Widerspruchsschreiben erscheinen."""
+    """Alle Angaben, die im Widerspruchsschreiben erscheinen.
+
+    Der Brief ist durchgehend **unpersönlich** formuliert: keine Ich-Form,
+    keine Anrede mit "Sie", keine Verwandtschaftsangaben. Dadurch ist derselbe
+    Text richtig, gleichgültig ob die betroffene Person ihn selbst schreibt
+    oder jemand anderes für sie - es gibt nur eine Fassung, die niemand an die
+    eigene Rolle anpassen muss.
+    """
 
     absender_name: str = ""
     absender_strasse: str = ""
@@ -226,12 +300,10 @@ class LetterData:
     bescheid_datum: str = ""
     begruendung: str = ""
     begruendung_folgt: bool = False
+    # Ort für die Datumszeile. Bleibt das Feld leer, wird der Ort aus der
+    # Absenderanschrift genommen - er ist dort ohnehin schon eingetragen.
     ort: str = ""
     datum: str = field(default_factory=lambda: datetime.date.today().strftime("%d.%m.%Y"))
-    # Wer den Widerspruch einlegt: die betroffene Person selbst oder eine
-    # angehörige Person für sie.
-    perspektive: str = SELBST
-    verhaeltnis: str = ""
     # Beigefügte Unterlagen, eine je Zeile. Bleibt das Feld leer, entfällt der
     # Anlagenblock ganz.
     anlagen: str = ""
@@ -247,42 +319,55 @@ class LetterData:
         return zeilen
 
     @property
-    def schreibt_selbst(self) -> bool:
-        return self.perspektive != ANGEHOERIGE
+    def ortszeile(self) -> str:
+        """Ort für die Datumszeile.
+
+        Ist das Feld leer, wird der Ort aus der Absenderanschrift genommen:
+        Aus "30159 Hannover" wird "Hannover". So muss niemand denselben Ort
+        zweimal eintragen - er steht ohnehin schon in der Anschrift.
+        """
+        if self.ort.strip():
+            return self.ort.strip()
+        # Führende Postleitzahl abschneiden. Vier Stellen sind für Österreich
+        # und die Schweiz mitgedacht, fünf für Deutschland.
+        return re.sub(r"^\s*\d{4,5}\s+", "", self.absender_plz_ort.strip()).strip()
 
     @property
     def name_versicherte(self) -> str:
-        """Name der versicherten Person - bei Eigenantrag der Absender."""
+        """Name der pflegebedürftigen Person.
+
+        Fehlt die Angabe, gilt der Absender als betroffen - dann hat jemand
+        den Widerspruch für sich selbst eingelegt und nur ein Namensfeld
+        ausgefüllt.
+        """
         return (self.versichert_name or self.absender_name).strip()
 
     @property
     def einleitungssatz(self) -> str:
-        """Der Satz, mit dem der Widerspruch eingelegt wird."""
+        """Der Satz, mit dem der Widerspruch eingelegt wird.
+
+        Unpersönlich formuliert: Es steht nicht darin, wer schreibt, sondern
+        nur, für wen und wogegen. Derselbe Satz stimmt deshalb für die
+        betroffene Person wie für jede andere, die für sie tätig wird.
+        """
         bezug = f"gegen den Bescheid vom {self.bescheid_datum}"
         if self.aktenzeichen.strip():
             bezug += f" mit dem Aktenzeichen {self.aktenzeichen.strip()}"
-        # Das hervorgehobene Wort steht mitten im Satz. Früher stand es
-        # zentriert auf einer eigenen Zeile, wodurch das "ein." allein in der
-        # nächsten Zeile hing - das sah wie ein Satzfehler aus.
-        if self.schreibt_selbst:
-            return f"hiermit lege ich {bezug} form- und fristgerecht **Widerspruch** ein."
-        name = self.name_versicherte or "die versicherte Person"
-        verhaeltnis = self.verhaeltnis.strip()
-        wer = f"meine {verhaeltnis}, {name}," if verhaeltnis else f"{name},"
-        return f"hiermit lege ich für {wer} {bezug} form- und fristgerecht **Widerspruch** ein."
+        name = self.name_versicherte
+        fuer = f"für {name} " if name else ""
+        # Das hervorgehobene Wort steht mitten im Satz. Stünde es zentriert auf
+        # einer eigenen Zeile, hinge das abschließende Wort darunter und sähe
+        # wie ein Satzfehler aus.
+        return f"hiermit wird {fuer}{bezug} form- und fristgerecht **Widerspruch** eingelegt."
 
     @property
     def unterschrift_hinweis(self) -> str:
         """Hinweis unter der Unterschriftszeile.
 
-        ``verhaeltnis`` beschreibt, wie die betroffene Person zur schreibenden
-        steht ("Mutter"). Unter der Unterschrift stünde damit fälschlich die
-        Rolle der betroffenen statt der unterschreibenden Person, deshalb hier
-        eine neutrale Angabe.
+        Neutral gehalten: Unterschreiben darf die betroffene Person selbst oder
+        wer für sie bevollmächtigt ist. Der Brief legt sich darauf nicht fest.
         """
-        if self.schreibt_selbst:
-            return "(Unterschrift der pflegebedürftigen Person)"
-        return "(Unterschrift der bevollmächtigten Person)"
+        return "(eigenhändige Unterschrift)"
 
 
 def validate(data: LetterData) -> list[str]:
@@ -300,8 +385,6 @@ def validate(data: LetterData) -> list[str]:
         fehlt.append("Das Datum des Bescheids")
     if not data.begruendung.strip() and not data.begruendung_folgt:
         fehlt.append("Die Begründung des Widerspruchs")
-    if not data.schreibt_selbst and not data.versichert_name.strip():
-        fehlt.append("Der Name der pflegebedürftigen Person")
     return fehlt
 
 
@@ -410,7 +493,7 @@ def build_letter_pdf(data: LetterData) -> bytes:
     # --- Informationsblock rechts: Ort und Datum --------------------------
     pdf.set_y(ANSCHRIFT_OBEN)
     pdf.set_x(INFOBLOCK_LINKS)
-    ort_datum = f"{data.ort.strip()}, den {data.datum}" if data.ort.strip() else data.datum
+    ort_datum = f"{data.ortszeile}, den {data.datum}" if data.ortszeile else data.datum
     pdf.set_font(schrift, size=SCHRIFTGROESSE)
     pdf.cell(SEITENBREITE - INFOBLOCK_LINKS - RAND_RECHTS, ZEILENHOEHE,
              text=ort_datum if schrift != "Helvetica" else sanitize(ort_datum),
@@ -444,7 +527,7 @@ def build_letter_pdf(data: LetterData) -> bytes:
     # --- Begründung -------------------------------------------------------
     if data.begruendung_folgt or not data.begruendung.strip():
         _absatz(pdf, schrift,
-                "Eine ausführliche Begründung des Widerspruchs reiche ich in Kürze nach.")
+                "Eine ausführliche Begründung des Widerspruchs wird in Kürze nachgereicht.")
     else:
         _text(pdf, schrift, "Begründung", stil="B")
         pdf.ln(2)
@@ -454,9 +537,9 @@ def build_letter_pdf(data: LetterData) -> bytes:
                 pdf.ln(2)
 
     pdf.ln(2)
-    # Nicht "Ich bitte Sie ...": die Begründung endet häufig selbst mit einer
-    # Bitte, zwei gleich beginnende Sätze hintereinander lesen sich holprig.
-    _absatz(pdf, schrift, "Bitte bestätigen Sie mir den Eingang dieses Widerspruchs.")
+    # Unpersönlich wie der übrige Brief: weder "ich bitte" noch "bestätigen
+    # Sie mir" - beides legt fest, wer schreibt.
+    _absatz(pdf, schrift, "Um eine Bestätigung des Eingangs wird gebeten.")
 
     # --- Grußformel und Unterschrift --------------------------------------
     pdf.ln(8)
