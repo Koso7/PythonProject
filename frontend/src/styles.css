@@ -1,33 +1,116 @@
 /*
- * Gestaltung der Oberfläche.
+ * Gestaltungssystem "Pflegehilfe Online".
  *
- * Die Werte sind aus der geprüften Vorgängerfassung übernommen und dort
- * gemessen worden: Fließtext 16,5:1 Kontrast, Schaltflächen 9,6:1 und 56 px
- * hoch. WCAG AAA verlangt 7:1, das Mindestmaß für Klickflächen sind 44 px.
+ * Leitgedanke: Wer hier Gesundheitsunterlagen hochlädt, muss der Anwendung
+ * ansehen, dass sie sorgfältig gebaut ist. Ruhige Flächen, ein durchgehendes
+ * Abstandsraster, eine einzige Schriftfamilie mit klarer Größenstaffel und
+ * zurückhaltende Farben - Aufmerksamkeit bekommt nur, was gerade zu tun ist.
+ *
+ * Barrierefreiheit bleibt Bedingung, nicht Zugabe:
+ *   Grundschrift 18 px (auf 21/24 umstellbar), Fließtext über 7:1 Kontrast,
+ *   Klickflächen mindestens 44 px, sichtbarer Tastaturfokus, zusätzlich ein
+ *   Hochkontrastmodus. Das Professionelle kommt aus Ordnung, nicht aus
+ *   kleinerer Schrift.
  */
 
+/* ========================================================================
+   1. GESTALTUNGSMARKEN
+   ======================================================================== */
 :root {
-  --text: #16202a;
-  --gedaempft: #41525f;
-  --panel: #f1f4f7;
-  --rand: #c6d2dc;
-  --primaer: #1b4965;
-  --primaer-hell: #2a6d94;
-  --erfolg: #1b5e20;
-  --warnung: #8b4000;
-  --fehler: #a81c1c;
+  /* --- Markenfarben: Blau als ruhige, verlässliche Grundstimmung ------- */
+  --marke-950: #07223a;
+  --marke-900: #0a2d4a;
+  --marke-800: #0e3c5f;
+  --marke-700: #0f4667;
+  --marke-600: #14567f;   /* Hauptaktionen - Weiß darauf erreicht 7.9:1 */
+  --marke-500: #1d7ea8;
+  --marke-100: #e9f2f8;
+  --marke-050: #f0f6fa;
+
+  /* --- Akzent: Türkis, nur für den Assistenten ------------------------- */
+  --akzent-700: #084e54;
+  --akzent-600: #0a6169;
+  --akzent-100: #e7f5f6;
+
+  /* --- Zustandsfarben, alle über 4.5:1 auf ihrer hellen Fläche --------- */
+  --erfolg-700: #0f5122;
+  --erfolg-100: #eaf7ee;
+  --warnung-700: #7a4103;
+  --warnung-100: #fdf3e8;
+  --fehler-700: #8f1717;
+  --fehler-100: #fdeded;
+
+  /* --- Neutrale Töne --------------------------------------------------- */
+  --text: #0f1f2c;        /* 16.9:1 auf Weiß */
+  /* Ein einziger gedämpfter Ton für alles Zweitrangige - Beschriftungen,
+     Hilfetexte, Platzhalter. Ein hellerer Ton für "noch leiser" käme nur auf
+     4.5:1; für eine Anwendung, die ausdrücklich Menschen mit schlechten Augen
+     bedient, ist das zu wenig, und zwei kaum unterscheidbare Grautöne wären
+     ohnehin keine Gestaltung, sondern Zufall. */
+  --gedaempft: #405060;   /* 8.1:1 auf Weiß, über 7:1 auf allen Tonflächen */
+  --rand: #d8e1ea;
+  --rand-kraeftig: #b9c8d6;
+  --flaeche: #f2f6fa;     /* Seitenhintergrund */
+  --karte: #ffffff;
+  --karte-gedaempft: #f8fbfd;
+
+  /* --- Abstandsraster: alles ist ein Vielfaches von 4 px --------------- */
+  --a1: 0.25rem;
+  --a2: 0.5rem;
+  --a3: 0.75rem;
+  --a4: 1rem;
+  --a5: 1.5rem;
+  --a6: 2rem;
+  --a7: 3rem;
+
+  /* --- Rundungen und Tiefe --------------------------------------------- */
+  --rund-klein: 8px;
+  --rund: 12px;
+  --rund-gross: 16px;
+  --schatten-1: 0 1px 2px rgba(15, 31, 44, 0.06), 0 1px 3px rgba(15, 31, 44, 0.04);
+  --schatten-2: 0 2px 4px rgba(15, 31, 44, 0.06), 0 8px 16px -6px rgba(15, 31, 44, 0.10);
+  --schatten-3: 0 4px 8px rgba(15, 31, 44, 0.08), 0 16px 32px -12px rgba(15, 31, 44, 0.16);
+
+  --seitenleiste: 17.5rem;
   --grund: 18px;
 }
 
-/* Hoher Kontrast: reines Schwarz, kräftigere Umrandungen. */
+/*
+ * Hochkontrast: reines Schwarz auf Weiß, kräftigere Ränder, keine Flächen
+ * mit schwachem Eigenkontrast. Bewusst als eigene Marken-Ebene, damit sich
+ * nichts anderes am Aufbau ändert.
+ */
 :root[data-kontrast="hoch"] {
   --text: #000000;
   --gedaempft: #000000;
-  --panel: #ffffff;
   --rand: #000000;
-  --primaer: #00293d;
+  --rand-kraeftig: #000000;
+  --flaeche: #ffffff;
+  --karte: #ffffff;
+  --karte-gedaempft: #ffffff;
+  --marke-600: #002d47;
+  --marke-700: #002135;
+  --marke-100: #ffffff;
+  --marke-050: #ffffff;
+  --akzent-600: #00393d;
+  --akzent-100: #ffffff;
+  --erfolg-100: #ffffff;
+  --warnung-100: #ffffff;
+  --fehler-100: #ffffff;
+  --schatten-1: none;
+  --schatten-2: none;
+  --schatten-3: none;
 }
 
+:root[data-kontrast="hoch"] .karte,
+:root[data-kontrast="hoch"] .kachel,
+:root[data-kontrast="hoch"] .hinweis {
+  border-width: 2px;
+}
+
+/* ========================================================================
+   2. GRUNDLAGEN
+   ======================================================================== */
 *,
 *::before,
 *::after {
@@ -36,263 +119,53 @@
 
 html {
   font-size: var(--grund);
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
-  background: #ffffff;
+  background: var(--flaeche);
   color: var(--text);
-  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Arial, sans-serif;
   font-size: 1rem;
-  line-height: 1.65;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+
+/* Überschriften etwas enger gesetzt - das wirkt gesetzter als der Fließtext. */
+h1, h2, h3, h4 {
+  margin: 0;
+  line-height: 1.25;
+  letter-spacing: -0.011em;
+  font-weight: 650;
+  color: var(--text);
+}
+h1 { font-size: 1.85rem; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.08rem; }
+h4 { font-size: 0.95rem; }
+
+p { margin: 0 0 var(--a3); }
+p:last-child { margin-bottom: 0; }
+
+a {
+  color: var(--marke-600);
+  text-underline-offset: 0.2em;
+}
+a:hover { color: var(--marke-700); }
 
 /* Tastaturbedienung muss jederzeit klar erkennbar sein. */
 *:focus-visible {
-  outline: 3px solid var(--primaer);
+  outline: 3px solid var(--marke-500);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: var(--rund-klein);
 }
 
-h1 { font-size: 2rem; line-height: 1.25; margin: 0 0 0.4em; }
-h2 { font-size: 1.5rem; margin: 0 0 0.5em; }
-h3 { font-size: 1.2rem; margin: 0 0 0.4em; }
-p  { margin: 0 0 0.8em; }
+.symbol { flex: none; display: block; }
 
-a { color: var(--primaer); }
-
-.huelle {
-  max-width: 1140px;
-  margin: 0 auto;
-  padding: 1.6rem 1.2rem 3rem;
-}
-
-/* --- Kopfzeile mit Systemzustand --------------------------------------- */
-.kopf {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-  border-bottom: 2px solid var(--rand);
-  padding-bottom: 0.8rem;
-  margin-bottom: 1rem;
-}
-.kopf-titel {
-  font-size: 1.55rem;
-  font-weight: 700;
-  color: var(--primaer);
-  margin: 0;
-}
-.plaketten { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.plakette {
-  background: var(--panel);
-  border: 1px solid var(--rand);
-  border-radius: 999px;
-  padding: 0.3rem 0.85rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.plakette.aktiv { border-color: var(--erfolg); color: var(--erfolg); }
-.plakette.offen { border-color: var(--warnung); color: var(--warnung); }
-
-/* --- Fortschritt über die drei Arbeitsschritte -------------------------- */
-.schritte { display: flex; gap: 0.5rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
-.schritt {
-  flex: 1 1 200px;
-  background: var(--panel);
-  border: 2px solid var(--rand);
-  border-left: 6px solid var(--rand);
-  border-radius: 8px;
-  padding: 0.65rem 0.9rem;
-}
-.schritt.fertig { border-left-color: var(--erfolg); }
-.schritt.laufend { border-left-color: var(--primaer); background: #ffffff; }
-.schritt-kopf {
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: var(--gedaempft);
-  letter-spacing: 0.03em;
-}
-.schritt-text { font-weight: 600; }
-.schritt-status { font-size: 0.82rem; color: var(--gedaempft); }
-.schritt.fertig .schritt-status { color: var(--erfolg); font-weight: 600; }
-
-/* --- Reiter ------------------------------------------------------------- */
-.reiter {
-  display: flex;
-  gap: 0.35rem;
-  border-bottom: 2px solid var(--rand);
-  margin-bottom: 1.5rem;
-  flex-wrap: wrap;
-}
-.reiter button {
-  background: none;
-  border: none;
-  border-bottom: 4px solid transparent;
-  padding: 0.85rem 1.1rem;
-  font-size: 1.02rem;
-  font-weight: 600;
-  color: var(--gedaempft);
-  cursor: pointer;
-  font-family: inherit;
-}
-.reiter button[aria-selected="true"] {
-  color: var(--primaer);
-  border-bottom-color: var(--primaer);
-}
-.reiter button:disabled { opacity: 0.45; cursor: not-allowed; }
-
-/* --- Schaltflächen ------------------------------------------------------ */
-button.knopf {
-  min-height: 3.1rem;
-  font-size: 1rem;
-  font-weight: 600;
-  font-family: inherit;
-  border-radius: 8px;
-  border: 2px solid var(--primaer);
-  padding: 0.5rem 1.1rem;
-  background: #ffffff;
-  color: var(--primaer);
-  cursor: pointer;
-}
-button.knopf.haupt { background: var(--primaer); color: #ffffff; }
-button.knopf:hover:not(:disabled) { background: var(--primaer-hell); color: #ffffff; }
-button.knopf:disabled { opacity: 0.5; cursor: not-allowed; border-color: var(--gedaempft); }
-button.knopf.gefahr { border-color: var(--fehler); color: var(--fehler); }
-button.knopf.gefahr:hover:not(:disabled) { background: var(--fehler); color: #ffffff; }
-
-/* --- Formulare ---------------------------------------------------------- */
-label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
-input[type="text"],
-input[type="password"],
-textarea,
-select {
-  width: 100%;
-  font-family: inherit;
-  font-size: 1rem;
-  color: var(--text);
-  border: 2px solid var(--rand);
-  border-radius: 8px;
-  padding: 0.6rem 0.7rem;
-  background: #ffffff;
-}
-input:focus, textarea:focus, select:focus { border-color: var(--primaer); }
-.feld { margin-bottom: 1rem; }
-.feld .hilfe { font-size: 0.85rem; color: var(--gedaempft); margin-top: 0.2rem; }
-.raster { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 1.2rem; }
-
-/* --- Karten und Hinweise ------------------------------------------------ */
-.karte {
-  background: var(--panel);
-  border: 1px solid var(--rand);
-  border-radius: 10px;
-  padding: 1.1rem 1.25rem;
-  margin-bottom: 1rem;
-}
-.hinweis {
-  border-radius: 8px;
-  border: 1px solid var(--rand);
-  border-left: 6px solid var(--primaer);
-  padding: 0.85rem 1rem;
-  margin-bottom: 1rem;
-  background: var(--panel);
-}
-.hinweis.erfolg { border-left-color: var(--erfolg); }
-.hinweis.warnung { border-left-color: var(--warnung); }
-.hinweis.fehler { border-left-color: var(--fehler); }
-.hinweis p:last-child { margin-bottom: 0; }
-
-/* --- Chat --------------------------------------------------------------- */
-.aufgaben { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.6rem; margin-bottom: 1.2rem; }
-.verlauf {
-  height: 26rem;
-  overflow-y: auto;
-  border: 1px solid var(--rand);
-  border-radius: 10px;
-  padding: 1rem;
-  background: #ffffff;
-  margin-bottom: 1rem;
-}
-.blase {
-  border-radius: 12px;
-  padding: 0.9rem 1.1rem;
-  margin-bottom: 0.8rem;
-  border: 1px solid var(--rand);
-  background: var(--panel);
-}
-.blase.nutzer { background: #ffffff; }
-.blase-kopf { font-size: 0.8rem; font-weight: 700; color: var(--gedaempft); margin-bottom: 0.3rem; }
-.blase p:last-child { margin-bottom: 0; }
-.eingabezeile { display: flex; gap: 0.6rem; align-items: flex-start; }
-.eingabezeile textarea { resize: vertical; min-height: 3.1rem; }
-
-/* --- Quellen ------------------------------------------------------------ */
-.quelle {
-  border-left: 4px solid var(--primaer);
-  background: var(--panel);
-  border-radius: 6px;
-  padding: 0.7rem 0.95rem;
-  margin-bottom: 0.7rem;
-}
-.quelle-art {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--gedaempft);
-  font-weight: 700;
-}
-.quelle-kopf { font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
-.ziffer {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.6rem;
-  height: 1.6rem;
-  background: var(--primaer);
-  color: #ffffff;
-  border-radius: 50%;
-  font-size: 0.85rem;
-  font-weight: 700;
-}
-.quelle-text { font-size: 0.94rem; margin-top: 0.35rem; }
-
-details > summary {
-  cursor: pointer;
-  font-weight: 600;
-  padding: 0.6rem 0;
-}
-
-.zugangscode {
-  font-family: "Consolas", "Courier New", monospace;
-  font-size: 1.05rem;
-  background: var(--panel);
-  border: 1px solid var(--rand);
-  border-radius: 8px;
-  padding: 0.8rem 1rem;
-  word-break: break-all;
-  user-select: all;
-}
-
-.fortschrittsbalken {
-  height: 0.6rem;
-  background: var(--panel);
-  border: 1px solid var(--rand);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.fortschrittsbalken > div { height: 100%; background: var(--primaer); }
-
-.fusszeile {
-  margin-top: 2rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--rand);
-  font-size: 0.85rem;
-  color: var(--gedaempft);
-}
-
-/* Nur für Vorleseprogramme sichtbar. */
+/* Nur für Vorleseprogramme. */
 .nur-vorlesen {
   position: absolute;
   width: 1px;
@@ -302,6 +175,932 @@ details > summary {
   white-space: nowrap;
 }
 
+/* Sprungmarke: erscheint erst beim Tabben. */
+.sprungmarke {
+  position: absolute;
+  left: var(--a4);
+  top: -4rem;
+  z-index: 100;
+  background: var(--marke-700);
+  color: #ffffff;
+  padding: var(--a3) var(--a4);
+  border-radius: var(--rund-klein);
+  font-weight: 600;
+  transition: top 0.15s ease;
+}
+.sprungmarke:focus { top: var(--a4); }
+
+/* ========================================================================
+   3. SCHALE: SEITENLEISTE + ARBEITSFLÄCHE
+   ======================================================================== */
+.schale {
+  display: grid;
+  grid-template-columns: var(--seitenleiste) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+/* --- Seitenleiste -------------------------------------------------------- */
+.seitenleiste {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--a5);
+  padding: var(--a5) var(--a4);
+  background: linear-gradient(168deg, var(--marke-900) 0%, var(--marke-950) 100%);
+  color: #e8f1f7;
+  overflow-y: auto;
+}
+:root[data-kontrast="hoch"] .seitenleiste {
+  background: #000000;
+  color: #ffffff;
+  border-right: 2px solid #000000;
+}
+
+.marke {
+  display: flex;
+  align-items: center;
+  gap: var(--a3);
+  padding: 0 var(--a2);
+}
+.marke-name {
+  font-size: 1.05rem;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+  line-height: 1.2;
+}
+.marke-zusatz {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #a9c6da;
+  margin-top: 2px;
+}
+:root[data-kontrast="hoch"] .marke-zusatz { color: #ffffff; }
+
+.navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.navigation button {
+  display: flex;
+  align-items: center;
+  gap: var(--a3);
+  width: 100%;
+  min-height: 2.9rem;
+  padding: var(--a2) var(--a3);
+  border: none;
+  border-radius: var(--rund-klein);
+  background: transparent;
+  color: #cfe1ee;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.navigation button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+}
+.navigation button[aria-current="page"] {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-weight: 640;
+  box-shadow: inset 3px 0 0 var(--marke-500);
+}
+.navigation button:disabled {
+  color: #7796ac;
+  cursor: not-allowed;
+}
+:root[data-kontrast="hoch"] .navigation button { color: #ffffff; }
+:root[data-kontrast="hoch"] .navigation button[aria-current="page"] {
+  background: #ffffff;
+  color: #000000;
+  box-shadow: none;
+}
+
+/* Zähler rechts im Navigationseintrag. */
+.nav-zahl {
+  margin-left: auto;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+:root[data-kontrast="hoch"] .nav-zahl {
+  background: #000000;
+  color: #ffffff;
+  border: 1px solid #ffffff;
+}
+.navigation button[aria-current="page"] .nav-zahl { background: rgba(255, 255, 255, 0.26); }
+:root[data-kontrast="hoch"] .navigation button[aria-current="page"] .nav-zahl {
+  background: #000000;
+  color: #ffffff;
+}
+
+.nav-gruppe {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  /* Heller als es aussieht nötig wäre: auf dem hellsten Punkt des
+     Verlaufs muss auch diese kleine Beschriftung über 7:1 bleiben. */
+  color: #a8c5da;
+  padding: var(--a4) var(--a3) var(--a1);
+}
+:root[data-kontrast="hoch"] .nav-gruppe { color: #ffffff; }
+
+.leiste-fuss { margin-top: auto; display: grid; gap: var(--a3); }
+
+/* Vertrauenshinweis am Fuß der Leiste. */
+.schutzhinweis {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--rund);
+  padding: var(--a3);
+}
+:root[data-kontrast="hoch"] .schutzhinweis {
+  background: #000000;
+  border-color: #ffffff;
+}
+.schutzhinweis-kopf {
+  display: flex;
+  align-items: center;
+  gap: var(--a2);
+  font-weight: 640;
+  font-size: 0.87rem;
+  color: #ffffff;
+}
+.schutzhinweis p {
+  margin: var(--a2) 0 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #b7d0e1;
+}
+:root[data-kontrast="hoch"] .schutzhinweis p { color: #ffffff; }
+
+/* --- Arbeitsfläche ------------------------------------------------------- */
+.arbeitsflaeche {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.kopfleiste {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--a4);
+  flex-wrap: wrap;
+  padding: var(--a4) var(--a6);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rand);
+}
+:root[data-kontrast="hoch"] .kopfleiste {
+  background: #ffffff;
+  backdrop-filter: none;
+  border-bottom-width: 2px;
+}
+.kopfleiste-titel { font-size: 1.2rem; font-weight: 660; }
+.kopfleiste-unterzeile {
+  font-size: 0.83rem;
+  color: var(--gedaempft);
+  margin-top: 1px;
+}
+.kopfleiste-rechts { display: flex; align-items: center; gap: var(--a3); flex-wrap: wrap; }
+
+.inhalt {
+  padding: var(--a6);
+  max-width: 92rem;
+  width: 100%;
+}
+
+/* ========================================================================
+   4. KARTEN, KACHELN, RASTER
+   ======================================================================== */
+.karte {
+  background: var(--karte);
+  border: 1px solid var(--rand);
+  border-radius: var(--rund);
+  box-shadow: var(--schatten-1);
+}
+.karte-kopf {
+  display: flex;
+  align-items: center;
+  gap: var(--a3);
+  padding: var(--a4) var(--a5);
+  border-bottom: 1px solid var(--rand);
+}
+.karte-kopf h2,
+.karte-kopf h3 { font-size: 1.02rem; font-weight: 640; }
+.karte-kopf .symbol { color: var(--marke-600); }
+.karte-kopf-rechts { margin-left: auto; display: flex; gap: var(--a2); align-items: center; }
+.karte-koerper { padding: var(--a5); }
+.karte-fuss {
+  padding: var(--a3) var(--a5);
+  border-top: 1px solid var(--rand);
+  background: var(--karte-gedaempft);
+  border-radius: 0 0 var(--rund) var(--rund);
+  font-size: 0.85rem;
+  color: var(--gedaempft);
+}
+
+/* Kennzahlen oben auf der Übersicht. */
+.kachelreihe {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: var(--a4);
+  margin-bottom: var(--a5);
+}
+.kachel {
+  display: flex;
+  gap: var(--a4);
+  align-items: flex-start;
+  background: var(--karte);
+  border: 1px solid var(--rand);
+  border-radius: var(--rund);
+  padding: var(--a4) var(--a5);
+  box-shadow: var(--schatten-1);
+}
+.kachel-symbol {
+  display: grid;
+  place-items: center;
+  width: 2.9rem;
+  height: 2.9rem;
+  border-radius: var(--rund-klein);
+  flex: none;
+}
+.kachel-symbol.blau   { background: var(--marke-100);   color: var(--marke-700); }
+.kachel-symbol.tuerkis{ background: var(--akzent-100);  color: var(--akzent-700); }
+.kachel-symbol.gruen  { background: var(--erfolg-100);  color: var(--erfolg-700); }
+.kachel-symbol.gelb   { background: var(--warnung-100); color: var(--warnung-700); }
+.kachel-symbol.rot    { background: var(--fehler-100);  color: var(--fehler-700); }
+:root[data-kontrast="hoch"] .kachel-symbol {
+  background: #ffffff;
+  color: #000000;
+  border: 2px solid #000000;
+}
+.kachel-titel {
+  font-size: 0.83rem;
+  font-weight: 620;
+  color: var(--gedaempft);
+  letter-spacing: 0.01em;
+}
+.kachel-wert {
+  font-size: 1.75rem;
+  font-weight: 690;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+.kachel-wert.klein { font-size: 1.2rem; }
+.kachel-zusatz { font-size: 0.8rem; color: var(--gedaempft); margin-top: 2px; }
+
+/* Spaltenaufteilung der Arbeitsbereiche. */
+.spalten { display: grid; gap: var(--a4); align-items: start; }
+.spalten.drei { grid-template-columns: minmax(0, 20rem) minmax(0, 1.6fr) minmax(0, 21rem); }
+.spalten.zwei { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.spalten.zwei-schmal { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+.stapel { display: grid; gap: var(--a4); align-content: start; }
+
+@media (max-width: 1500px) {
+  .spalten.drei { grid-template-columns: minmax(0, 21rem) minmax(0, 1fr); }
+  .spalten.drei > :nth-child(3) { grid-column: 1 / -1; }
+}
+@media (max-width: 1150px) {
+  .spalten.drei,
+  .spalten.zwei,
+  .spalten.zwei-schmal { grid-template-columns: minmax(0, 1fr); }
+  .spalten.drei > :nth-child(3) { grid-column: auto; }
+}
+
+/* Feldraster in Formularen. */
+.raster { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0 var(--a4); }
+
+/* ========================================================================
+   5. SCHALTFLÄCHEN
+   ======================================================================== */
+button.knopf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--a2);
+  min-height: 2.75rem;          /* = 49,5 px bei 18 px Grundschrift */
+  padding: 0 var(--a4);
+  border-radius: var(--rund-klein);
+  border: 1px solid var(--rand-kraeftig);
+  background: var(--karte);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 620;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease,
+    box-shadow 0.12s ease, transform 0.08s ease;
+}
+button.knopf:hover:not(:disabled) {
+  background: var(--marke-050);
+  border-color: var(--marke-500);
+}
+button.knopf:active:not(:disabled) { transform: translateY(1px); }
+
+button.knopf.haupt {
+  background: var(--marke-600);
+  border-color: var(--marke-600);
+  color: #ffffff;
+  box-shadow: var(--schatten-1);
+}
+button.knopf.haupt:hover:not(:disabled) {
+  background: var(--marke-700);
+  border-color: var(--marke-700);
+  box-shadow: var(--schatten-2);
+}
+
+button.knopf.gefahr { border-color: var(--fehler-700); color: var(--fehler-700); }
+button.knopf.gefahr:hover:not(:disabled) {
+  background: var(--fehler-700);
+  border-color: var(--fehler-700);
+  color: #ffffff;
+}
+
+button.knopf.stumm {
+  border-color: transparent;
+  background: transparent;
+  color: var(--gedaempft);
+}
+button.knopf.stumm:hover:not(:disabled) { background: var(--marke-050); color: var(--marke-700); }
+
+/* 2.5rem sind bei 18 px Grundschrift 45 px - knapp über dem Mindestmaß von
+   44 px für Klickflächen (WCAG 2.5.5). Kleiner darf dieser Knopf nicht werden. */
+button.knopf.klein { min-height: 2.5rem; font-size: 0.87rem; padding: 0 var(--a3); }
+button.knopf.breit { width: 100%; }
+
+button.knopf:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--karte-gedaempft);
+  border-color: var(--rand);
+  color: var(--gedaempft);
+  box-shadow: none;
+}
+
+/* ========================================================================
+   6. PLAKETTEN
+   ======================================================================== */
+.plakette {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--a1);
+  border-radius: 999px;
+  padding: 0.22rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 640;
+  white-space: nowrap;
+  border: 1px solid var(--rand-kraeftig);
+  background: var(--karte);
+  color: var(--gedaempft);
+}
+.plakette.gruen  { background: var(--erfolg-100);  border-color: var(--erfolg-700);  color: var(--erfolg-700); }
+.plakette.gelb   { background: var(--warnung-100); border-color: var(--warnung-700); color: var(--warnung-700); }
+.plakette.rot    { background: var(--fehler-100);  border-color: var(--fehler-700);  color: var(--fehler-700); }
+.plakette.blau   { background: var(--marke-100);   border-color: var(--marke-600);   color: var(--marke-700); }
+:root[data-kontrast="hoch"] .plakette { background: #ffffff; color: #000000; border-color: #000000; }
+
+/* Pulsierender Punkt für "Sitzung aktiv". */
+.punkt {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+/* ========================================================================
+   7. FORMULARE
+   ======================================================================== */
+label { display: block; font-weight: 620; font-size: 0.9rem; margin-bottom: var(--a1); }
+
+input[type="text"],
+input[type="date"],
+input[type="password"],
+textarea,
+select {
+  width: 100%;
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--karte);
+  border: 1px solid var(--rand-kraeftig);
+  border-radius: var(--rund-klein);
+  padding: 0.62rem 0.75rem;
+  min-height: 2.75rem;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+input::placeholder, textarea::placeholder { color: var(--gedaempft); }
+input:hover:not(:disabled), textarea:hover, select:hover { border-color: var(--marke-500); }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--marke-600);
+  box-shadow: 0 0 0 3px var(--marke-100);
+  outline: none;
+}
+textarea { resize: vertical; line-height: 1.6; }
+
+.feld { margin-bottom: var(--a4); }
+.hilfe { font-size: 0.82rem; color: var(--gedaempft); margin-top: var(--a1); line-height: 1.5; }
+
+/* Auswahl über große, anklickbare Flächen statt nackter Radiofelder. */
+.wahlfeld {
+  display: flex;
+  gap: var(--a3);
+  align-items: flex-start;
+  padding: var(--a3) var(--a4);
+  border: 1px solid var(--rand-kraeftig);
+  border-radius: var(--rund-klein);
+  background: var(--karte);
+  cursor: pointer;
+  font-weight: 500;
+  margin-bottom: var(--a2);
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.wahlfeld:hover { border-color: var(--marke-500); background: var(--marke-050); }
+.wahlfeld:has(input:checked) {
+  border-color: var(--marke-600);
+  background: var(--marke-050);
+  box-shadow: inset 0 0 0 1px var(--marke-600);
+}
+.wahlfeld input { margin-top: 0.28rem; width: 1.15rem; height: 1.15rem; flex: none; accent-color: var(--marke-600); }
+.wahlfeld-titel { font-weight: 620; display: block; }
+.wahlfeld-text { font-size: 0.85rem; color: var(--gedaempft); display: block; margin-top: 2px; }
+
+fieldset { border: none; margin: 0; padding: 0; }
+legend { font-weight: 620; font-size: 0.9rem; margin-bottom: var(--a2); padding: 0; }
+
+/* Ablagefläche für Dateien. */
+.ablage {
+  border: 2px dashed var(--rand-kraeftig);
+  border-radius: var(--rund);
+  background: var(--karte-gedaempft);
+  padding: var(--a6) var(--a4);
+  text-align: center;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.ablage.bereit { border-color: var(--marke-600); background: var(--marke-050); }
+.ablage .symbol { margin: 0 auto var(--a2); color: var(--marke-600); }
+.ablage-titel { font-weight: 620; }
+.ablage-text { font-size: 0.85rem; color: var(--gedaempft); margin-top: var(--a1); }
+
+/* ========================================================================
+   8. HINWEISE
+   ======================================================================== */
+.hinweis {
+  display: flex;
+  gap: var(--a3);
+  align-items: flex-start;
+  border-radius: var(--rund-klein);
+  border: 1px solid var(--rand);
+  border-left: 4px solid var(--marke-600);
+  background: var(--marke-050);
+  padding: var(--a3) var(--a4);
+  margin-bottom: var(--a4);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+.hinweis > .symbol { margin-top: 0.15rem; color: var(--marke-700); }
+.hinweis.erfolg  { border-left-color: var(--erfolg-700);  background: var(--erfolg-100); }
+.hinweis.erfolg  > .symbol { color: var(--erfolg-700); }
+.hinweis.warnung { border-left-color: var(--warnung-700); background: var(--warnung-100); }
+.hinweis.warnung > .symbol { color: var(--warnung-700); }
+.hinweis.fehler  { border-left-color: var(--fehler-700);  background: var(--fehler-100); }
+.hinweis.fehler  > .symbol { color: var(--fehler-700); }
+.hinweis ul { margin: var(--a2) 0 0; padding-left: 1.15rem; }
+.hinweis li { margin-bottom: var(--a1); }
+
+/* ========================================================================
+   9. ARBEITSSCHRITTE
+   ======================================================================== */
+.schritte {
+  display: flex;
+  gap: 0;
+  list-style: none;
+  margin: 0 0 var(--a5);
+  padding: 0;
+  background: var(--karte);
+  border: 1px solid var(--rand);
+  border-radius: var(--rund);
+  box-shadow: var(--schatten-1);
+  overflow: hidden;
+}
+.schritt {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: var(--a3);
+  padding: var(--a4) var(--a5);
+  border-right: 1px solid var(--rand);
+  min-width: 0;
+}
+.schritt:last-child { border-right: none; }
+.schritt-nummer {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 50%;
+  border: 2px solid var(--rand-kraeftig);
+  color: var(--gedaempft);
+  font-weight: 700;
+  font-size: 0.88rem;
+  flex: none;
+}
+.schritt.fertig .schritt-nummer {
+  background: var(--erfolg-700);
+  border-color: var(--erfolg-700);
+  color: #ffffff;
+}
+.schritt.laufend .schritt-nummer {
+  border-color: var(--marke-600);
+  color: var(--marke-700);
+  background: var(--marke-100);
+}
+.schritt-text { font-weight: 620; font-size: 0.94rem; }
+.schritt-status { font-size: 0.8rem; color: var(--gedaempft); }
+.schritt.fertig .schritt-status { color: var(--erfolg-700); font-weight: 600; }
+@media (max-width: 900px) {
+  .schritte { flex-direction: column; }
+  .schritt { border-right: none; border-bottom: 1px solid var(--rand); }
+  .schritt:last-child { border-bottom: none; }
+}
+
+/* ========================================================================
+   10. GESPRÄCH MIT DEM ASSISTENTEN
+   ======================================================================== */
+.aufgaben { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--a3); }
+.aufgabe {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--a1);
+  text-align: left;
+  padding: var(--a3) var(--a4);
+  min-height: 3.6rem;
+  border: 1px solid var(--rand-kraeftig);
+  border-radius: var(--rund-klein);
+  background: var(--karte);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+}
+.aufgabe:hover:not(:disabled) {
+  border-color: var(--akzent-600);
+  background: var(--akzent-100);
+  box-shadow: var(--schatten-1);
+}
+.aufgabe:disabled { opacity: 0.55; cursor: not-allowed; }
+.aufgabe-titel { font-weight: 640; font-size: 0.94rem; }
+.aufgabe-text { font-size: 0.8rem; color: var(--gedaempft); line-height: 1.45; }
+
+.verlauf {
+  height: 30rem;
+  overflow-y: auto;
+  padding: var(--a5);
+  background: var(--karte-gedaempft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--a4);
+}
+.blase { max-width: 54rem; }
+.blase-kopf {
+  display: flex;
+  align-items: center;
+  gap: var(--a2);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--gedaempft);
+  margin-bottom: var(--a2);
+}
+.blase-koerper {
+  border-radius: var(--rund);
+  padding: var(--a4);
+  white-space: pre-wrap;
+  border: 1px solid var(--rand);
+  background: var(--karte);
+  box-shadow: var(--schatten-1);
+}
+.blase.nutzer { margin-left: auto; }
+.blase.nutzer .blase-kopf { justify-content: flex-end; }
+.blase.nutzer .blase-koerper {
+  background: var(--marke-600);
+  border-color: var(--marke-600);
+  color: #ffffff;
+}
+:root[data-kontrast="hoch"] .blase.nutzer .blase-koerper { background: #000000; border-color: #000000; }
+.blase.assistent .blase-koerper { border-left: 3px solid var(--akzent-600); }
+
+.leerer-verlauf {
+  margin: auto;
+  text-align: center;
+  max-width: 28rem;
+  color: var(--gedaempft);
+}
+.leerer-verlauf .symbol { margin: 0 auto var(--a3); color: var(--rand-kraeftig); }
+
+/* Punkte, während der Assistent arbeitet. */
+.tippen { display: inline-flex; gap: 0.28rem; align-items: center; }
+.tippen span {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: var(--akzent-600);
+  animation: huepfen 1.3s infinite ease-in-out;
+}
+.tippen span:nth-child(2) { animation-delay: 0.18s; }
+.tippen span:nth-child(3) { animation-delay: 0.36s; }
+@keyframes huepfen {
+  0%, 65%, 100% { opacity: 0.28; transform: translateY(0); }
+  32%           { opacity: 1;    transform: translateY(-0.22rem); }
+}
+
+.eingabezeile {
+  display: flex;
+  gap: var(--a3);
+  align-items: flex-end;
+  padding: var(--a4) var(--a5);
+  border-top: 1px solid var(--rand);
+  background: var(--karte);
+  border-radius: 0 0 var(--rund) var(--rund);
+}
+.eingabezeile textarea { min-height: 2.75rem; max-height: 10rem; }
+.eingabezeile .knopf.haupt {
+  background: var(--akzent-600);
+  border-color: var(--akzent-600);
+  width: 2.75rem;
+  padding: 0;
+  flex: none;
+}
+.eingabezeile .knopf.haupt:hover:not(:disabled) {
+  background: var(--akzent-700);
+  border-color: var(--akzent-700);
+}
+
+/* ========================================================================
+   11. QUELLEN UND DOKUMENTE
+   ======================================================================== */
+.quellenliste { display: grid; gap: var(--a3); }
+.quelle {
+  border: 1px solid var(--rand);
+  border-radius: var(--rund-klein);
+  background: var(--karte);
+  overflow: hidden;
+}
+.quelle > summary {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--a3);
+  padding: var(--a3) var(--a4);
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.9rem;
+}
+.quelle > summary::-webkit-details-marker { display: none; }
+.quelle > summary:hover { background: var(--marke-050); }
+.quelle[open] > summary { border-bottom: 1px solid var(--rand); background: var(--marke-050); }
+.quelle-name { font-weight: 620; word-break: break-word; line-height: 1.4; }
+.quelle-art {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--gedaempft);
+  font-weight: 700;
+  margin-top: 2px;
+}
+.quelle-text {
+  padding: var(--a3) var(--a4);
+  font-size: 0.88rem;
+  color: var(--gedaempft);
+  line-height: 1.6;
+  background: var(--karte-gedaempft);
+}
+.ziffer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  background: var(--marke-600);
+  color: #ffffff;
+  border-radius: var(--rund-klein);
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.ziffer.nutzer { background: var(--akzent-600); }
+:root[data-kontrast="hoch"] .ziffer { background: #000000; }
+
+/* Liste eingelesener Unterlagen. */
+.dateiliste { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--a2); }
+.dateizeile {
+  display: flex;
+  align-items: center;
+  gap: var(--a3);
+  padding: var(--a3);
+  border: 1px solid var(--rand);
+  border-radius: var(--rund-klein);
+  background: var(--karte);
+}
+.dateizeile .symbol { color: var(--marke-600); }
+.dateiname { font-weight: 600; font-size: 0.9rem; word-break: break-word; min-width: 0; flex: 1; }
+
+/* ========================================================================
+   12. FRISTENRECHNER
+   ======================================================================== */
+.frist {
+  text-align: center;
+  padding: var(--a5) var(--a4);
+  border-radius: var(--rund);
+  border: 1px solid var(--rand);
+  background: var(--karte-gedaempft);
+}
+.frist.gruen  { background: var(--erfolg-100);  border-color: var(--erfolg-700); }
+.frist.gelb   { background: var(--warnung-100); border-color: var(--warnung-700); }
+.frist.rot    { background: var(--fehler-100);  border-color: var(--fehler-700); }
+.frist-datum {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.frist.gruen .frist-datum { color: var(--erfolg-700); }
+.frist.gelb  .frist-datum { color: var(--warnung-700); }
+.frist.rot   .frist-datum { color: var(--fehler-700); }
+.frist-rest { font-size: 0.88rem; font-weight: 620; margin-top: var(--a1); }
+
+/* ========================================================================
+   13. ZUGANGSCODE UND FORTSCHRITTSBALKEN
+   ======================================================================== */
+.zugangscode {
+  font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  background: var(--karte-gedaempft);
+  border: 1px solid var(--rand-kraeftig);
+  border-radius: var(--rund-klein);
+  padding: var(--a3) var(--a4);
+  word-break: break-all;
+  user-select: all;
+  line-height: 1.55;
+}
+
+.fortschrittsbalken {
+  height: 0.5rem;
+  background: var(--rand);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.fortschrittsbalken > div {
+  height: 100%;
+  background: var(--marke-600);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.fortschrittsbalken.gelb > div { background: var(--warnung-700); }
+.fortschrittsbalken.rot  > div { background: var(--fehler-700); }
+
+/* ========================================================================
+   14. STARTSEITE
+   ======================================================================== */
+.start {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  background: var(--karte);
+}
+@media (max-width: 1050px) {
+  .start { grid-template-columns: minmax(0, 1fr); }
+  .start-bild { display: none; }
+}
+
+.start-inhalt {
+  padding: var(--a7) var(--a7) var(--a6);
+  max-width: 40rem;
+  justify-self: end;
+  width: 100%;
+}
+.start-marke { display: flex; align-items: center; gap: var(--a3); margin-bottom: var(--a6); }
+.start h1 { font-size: 2.1rem; margin-bottom: var(--a3); }
+.start-vorspann { font-size: 1.05rem; color: var(--gedaempft); margin-bottom: var(--a6); }
+
+.start-bild {
+  background: linear-gradient(168deg, var(--marke-800) 0%, var(--marke-950) 100%);
+  color: #e8f1f7;
+  padding: var(--a7) var(--a6);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--a5);
+}
+:root[data-kontrast="hoch"] .start-bild { background: #000000; }
+.start-bild h2 { color: #ffffff; font-size: 1.3rem; }
+
+.ablaufliste { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--a5); }
+.ablaufschritt { display: flex; gap: var(--a4); align-items: flex-start; }
+.ablaufschritt-nummer {
+  display: grid;
+  place-items: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+  font-weight: 700;
+  flex: none;
+}
+:root[data-kontrast="hoch"] .ablaufschritt-nummer { background: #ffffff; color: #000000; }
+.ablaufschritt h3 { color: #ffffff; font-size: 1rem; }
+.ablaufschritt p { color: #b7d0e1; font-size: 0.88rem; margin: var(--a1) 0 0; line-height: 1.55; }
+:root[data-kontrast="hoch"] .ablaufschritt p { color: #ffffff; }
+
+.merkmale { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--a2); }
+.merkmal { display: flex; gap: var(--a2); align-items: flex-start; font-size: 0.88rem; color: #cfe1ee; }
+.merkmal .symbol { color: #6fd0b4; margin-top: 0.12rem; }
+:root[data-kontrast="hoch"] .merkmal { color: #ffffff; }
+:root[data-kontrast="hoch"] .merkmal .symbol { color: #ffffff; }
+
+.trenner {
+  display: flex;
+  align-items: center;
+  gap: var(--a3);
+  margin: var(--a5) 0;
+  color: var(--gedaempft);
+  font-size: 0.85rem;
+}
+.trenner::before,
+.trenner::after { content: ""; flex: 1; height: 1px; background: var(--rand); }
+
+/* ========================================================================
+   15. SONSTIGES
+   ======================================================================== */
+.fusszeile {
+  padding: var(--a5) var(--a6) var(--a6);
+  font-size: 0.82rem;
+  color: var(--gedaempft);
+  border-top: 1px solid var(--rand);
+  margin-top: auto;
+  line-height: 1.6;
+}
+
+.werkzeugzeile { display: flex; gap: var(--a2); flex-wrap: wrap; align-items: center; }
+
+@media (max-width: 960px) {
+  .schale { grid-template-columns: minmax(0, 1fr); }
+  .seitenleiste {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--a3);
+    padding: var(--a3) var(--a4);
+  }
+  .navigation { flex-direction: row; flex-wrap: wrap; flex: 1; justify-content: flex-end; }
+  .navigation button { width: auto; }
+  .nav-gruppe, .leiste-fuss { display: none; }
+  .kopfleiste, .inhalt { padding-left: var(--a4); padding-right: var(--a4); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  * { animation: none !important; transition: none !important; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@media print {
+  .seitenleiste, .kopfleiste, .eingabezeile, button { display: none !important; }
+  .schale { grid-template-columns: 1fr; }
+  body { background: #ffffff; }
 }
