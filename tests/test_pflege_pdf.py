@@ -42,7 +42,7 @@ class TestStripMarkdown:
         [
             ("**fett**", "fett"),
             ("## Überschrift", "Überschrift"),
-            ("* Aufzählung", "- Aufzählung"),
+            ("* Aufzählung", "Aufzählung"),
             ("Ein *betontes* Wort", "Ein betontes Wort"),
         ],
     )
@@ -202,7 +202,8 @@ class TestBuildLetterPdf:
         assert erwartet in _pdf_text(vollstaendige_daten, tmp_path)
 
     def test_folgt_dem_musterbrief_aufbau(self, vollstaendige_daten, tmp_path):
-        text = _pdf_text(vollstaendige_daten, tmp_path)
+        # Zeilenumbrüche zusammenfassen: der Satzbau darf über Zeilen laufen.
+        text = " ".join(_pdf_text(vollstaendige_daten, tmp_path).split())
         # Reihenfolge: Anrede -> Einleitung -> "Widerspruch" -> Begründung -> Gruß
         assert text.index("Sehr geehrte") < text.index("form- und fristgerecht")
         assert text.index("form- und fristgerecht") < text.index("Begründung")
@@ -237,3 +238,109 @@ class TestBuildLetterPdf:
         )
         text = _pdf_text(vollstaendige_daten, tmp_path)
         assert not any(z in text for z in "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+# ---------------------------------------------------------------------------
+# PERSPEKTIVE
+# ---------------------------------------------------------------------------
+class TestPerspektive:
+    """Wer den Widerspruch einlegt, bestimmt die Formulierung."""
+
+    def _angehoerige(self) -> pdf.LetterData:
+        return pdf.LetterData(
+            absender_name="Sabine Müller", absender_strasse="Musterweg 1",
+            absender_plz_ort="99999 Musterstadt", kasse_name="Muster-Pflegekasse",
+            bescheid_datum="12.03.2025", begruendung="Der Hilfebedarf wurde zu niedrig bewertet.",
+            perspektive=pdf.ANGEHOERIGE, versichert_name="Elfriede Müller",
+            verhaeltnis="Mutter",
+        )
+
+    def test_eigenantrag_schreibt_in_der_ich_form(self):
+        daten = pdf.LetterData(bescheid_datum="12.03.2025")
+        assert daten.einleitungssatz.startswith("hiermit lege ich gegen den Bescheid")
+        assert "für" not in daten.einleitungssatz
+
+    def test_angehoerige_nennt_person_und_verhaeltnis(self):
+        satz = self._angehoerige().einleitungssatz
+        assert "für meine Mutter, Elfriede Müller," in satz
+
+    def test_unterschriftshinweis_richtet_sich_nach_der_rolle(self):
+        assert "pflegebedürftigen Person" in pdf.LetterData().unterschrift_hinweis
+        assert "bevollmächtigten" in self._angehoerige().unterschrift_hinweis
+
+    def test_angehoerige_brauchen_den_namen_der_betroffenen(self):
+        daten = self._angehoerige()
+        daten.versichert_name = ""
+        assert "Der Name der pflegebedürftigen Person" in pdf.validate(daten)
+
+    def test_pdf_nennt_die_betroffene_person(self, tmp_path):
+        text = _pdf_text(self._angehoerige(), tmp_path)
+        assert "Elfriede Müller" in text
+        assert "Versicherte Person" in text
+
+
+class TestDin5008:
+    """Aufbau als Geschäftsbrief."""
+
+    def test_enthaelt_ruecksendeangabe_ueber_dem_anschriftfeld(self, vollstaendige_daten, tmp_path):
+        text = _pdf_text(vollstaendige_daten, tmp_path)
+        # Die Rücksendeangabe steht vor der Empfängeranschrift.
+        assert text.index("Musterweg 1") < text.index("Pflegekasse bei der")
+
+    def test_datum_steht_mit_ort_im_informationsblock(self, vollstaendige_daten, tmp_path):
+        assert "Musterstadt, den" in _pdf_text(vollstaendige_daten, tmp_path)
+
+    def test_verwendet_eine_echte_schrift_wenn_vorhanden(self, vollstaendige_daten, tmp_path):
+        import os
+        vorhanden = any(os.path.exists(k[1]) for k in pdf.SCHRIFT_KANDIDATEN)
+        if not vorhanden:
+            pytest.skip("Keine Systemschrift vorhanden")
+        # Umlaute überleben nur mit eingebetteter Schrift unverändert.
+        assert "Müller-Groß" in _pdf_text(vollstaendige_daten, tmp_path)
+
+
+class TestStripContextHeaders:
+    """Technische Trennzeilen dürfen niemals im Brief landen."""
+
+    @pytest.mark.parametrize(
+        "roh",
+        ["----- [3] ----- Herkunft: Gutachten.pdf | Kapitel: Modul 4\nDer Inhalt.",
+         "----- Herkunft: Bescheid der Pflegekasse.pdf\nDer Inhalt.",
+         "-----  Herkunft: a.pdf\nDer Inhalt.",
+         "----- 3 ----- Herkunft: a.pdf\nDer Inhalt."],
+    )
+    def test_entfernt_alle_schreibweisen(self, roh):
+        assert "Herkunft" not in pdf.strip_context_headers(roh)
+
+    def test_laesst_gedankenstriche_in_ruhe(self):
+        text = "Im Modul 4 - Selbstversorgung - wurde gekürzt."
+        assert pdf.strip_context_headers(text) == text
+
+    def test_anrede_wird_nach_dem_entfernen_erkannt(self):
+        # Stünde die Trennzeile davor, bliebe die Anrede stehen und
+        # erschiene doppelt im Brief.
+        roh = "----- Herkunft: a.pdf\nSehr geehrte Damen und Herren,\n\nDer Inhalt."
+        assert pdf.prepare_begruendung(roh) == "Der Inhalt."
+
+    def test_pdf_bleibt_frei_von_trennzeilen(self, vollstaendige_daten, tmp_path):
+        vollstaendige_daten.begruendung = pdf.prepare_begruendung(
+            "----- Herkunft: Gutachten.pdf\nDie Bewertung ist zu niedrig ausgefallen."
+        )
+        assert "Herkunft" not in _pdf_text(vollstaendige_daten, tmp_path)
+
+    @pytest.mark.parametrize("marke", ["[Einleitung]", "[Hauptteil]", "[Schluss]", "[Begründung]:"])
+    def test_entfernt_gliederungsmarken(self, marke):
+        roh = f"{marke}\nDer eigentliche Inhalt des Absatzes."
+        assert marke.strip(":") not in pdf.strip_context_headers(roh)
+
+    def test_marke_vor_der_anrede_verhindert_keine_bereinigung(self):
+        roh = "[Einleitung]\nSehr geehrte Damen und Herren,\n\nDer Inhalt."
+        assert pdf.prepare_begruendung(roh) == "Der Inhalt."
+
+    def test_laesst_klammern_im_satz_stehen(self):
+        text = "Im Modul 4 (Selbstversorgung) wurden 15 Punkte vergeben."
+        assert pdf.strip_context_headers(text) == text
+
+    def test_beginnt_nach_entfernter_anrede_gross(self):
+        roh = "Sehr geehrte Damen und Herren,\n\nmit Schreiben vom 12.03.2025 haben Sie entschieden."
+        assert pdf.prepare_begruendung(roh).startswith("Mit Schreiben")

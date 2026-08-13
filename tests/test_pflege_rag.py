@@ -346,3 +346,29 @@ class TestStripContextHeaders:
     def test_wird_beim_rendern_angewandt(self):
         roh = "----- [1] ----- Herkunft: a.pdf\nAussage [1]."
         assert rag.render_citations(roh, [1]) == "Aussage ¹."
+
+
+class TestKontextbudget:
+    """Das örtliche Modell hat 8192 Token; zu viel Kontext zerstört die Antwort."""
+
+    def _belege(self, anzahl: int, laenge: int = 900):
+        return [
+            (Document(page_content="x" * laenge, metadata={"source": f"{i}.pdf"}), 1.0 - i / 100)
+            for i in range(anzahl)
+        ]
+
+    def test_schneidet_auf_das_budget_zu(self):
+        behalten, rest = rag._passe_in_kontext(self._belege(20), 4500)
+        assert len(behalten) == 5
+        assert rest == 0
+
+    def test_behaelt_die_bestbewerteten(self):
+        behalten, _ = rag._passe_in_kontext(self._belege(10), 2700)
+        assert [d.metadata["source"] for d, _ in behalten] == ["0.pdf", "1.pdf", "2.pdf"]
+
+    def test_behaelt_mindestens_einen_beleg(self):
+        behalten, _ = rag._passe_in_kontext(self._belege(3, laenge=99999), 100)
+        assert len(behalten) == 1
+
+    def test_vertraegt_leere_liste(self):
+        assert rag._passe_in_kontext([], 1000) == ([], 1000)

@@ -68,6 +68,16 @@ FINAL_EXPERT_CHUNKS_BREIT = 6
 # hat die aussichtsreichsten Treffer da bereits nach oben sortiert.
 MAX_RERANK_CANDIDATES = 40
 
+# Obergrenze für die Textmenge, die als Beleg mitgeschickt wird.
+#
+# Das örtliche Sprachmodell arbeitet mit 8192 Token Kontext. Darin müssen
+# Systemprompt, Belege, Gesprächsverlauf UND die Antwort Platz finden. Wird es
+# zu eng, bricht die Antwort nicht sauber ab, sondern zerfällt in
+# zusammenhanglose Bruchstücke ("MD3.75 members 6.25 MD15.0"). Rund vier
+# Zeichen entsprechen einem Token; 9000 Zeichen lassen genug Raum für eine
+# ausführliche Antwort.
+MAX_CONTEXT_CHARS = 9000
+
 # Kandidaten unterhalb dieser Bewertung sind für die Frage ohne Aussagekraft.
 # Tabellenrahmen und Seitenzahlen erreichen im Test genau 0,000.
 RERANK_MIN_SCORE = 0.05
@@ -669,8 +679,10 @@ _CITATION_RE = re.compile(r"\[(\d{1,2})\]")
 # Antwort ("----- [3] ----- Herkunft: … | Kapitel: …"). Ein Verbot im Prompt
 # genügt dafür erwiesenermaßen nicht, deshalb werden sie hier zuverlässig
 # entfernt - unabhängig davon, wie sich das Modell verhält.
+# Das Modell übernimmt die Trennzeile mal vollständig ("----- [3] ----- Herkunft: …"),
+# mal verkürzt ohne Nummer ("----- Herkunft: …"). Beide Formen müssen weg.
 _CONTEXT_HEADER_RE = re.compile(
-    r"-{3,}\s*\[?\d{1,2}\]?\s*-{3,}\s*Herkunft:[^\n]*", re.IGNORECASE
+    r"-{3,}\s*(?:\[?\d{1,2}\]?\s*-{3,}\s*)?Herkunft:[^\n]*", re.IGNORECASE
 )
 _LEFTOVER_SEPARATOR_RE = re.compile(r"^\s*-{3,}\s*\[?\d{1,2}\]?\s*-{3,}\s*$", re.MULTILINE)
 
@@ -876,6 +888,26 @@ def select_per_query(
     return sorted(gesammelt.values(), key=lambda paar: paar[1], reverse=True)
 
 
+def _passe_in_kontext(
+    bewertet: Sequence[Tuple[Document, float]], budget: int
+) -> Tuple[List[Tuple[Document, float]], int]:
+    """Behält so viele Belege, wie in das Kontextfenster passen.
+
+    Die Liste ist nach Bewertung sortiert; abgeschnitten wird also stets das
+    Schwächste. Mindestens ein Beleg bleibt erhalten, damit die Antwort nicht
+    ohne jede Grundlage entsteht.
+    """
+    behalten: List[Tuple[Document, float]] = []
+    verbraucht = 0
+    for doc, wert in bewertet:
+        laenge = len(doc.page_content)
+        if behalten and verbraucht + laenge > budget:
+            break
+        behalten.append((doc, wert))
+        verbraucht += laenge
+    return behalten, max(budget - verbraucht, 0)
+
+
 def prepare_context(
     expert_index: Optional[HybridIndex],
     user_index: Optional[HybridIndex],
@@ -916,6 +948,12 @@ def prepare_context(
         fach_bewertet = rerank(
             reranker, question, expert_index.search(fach_fragen), FINAL_EXPERT_CHUNKS
         )
+
+    # Auf das Kontextfenster des Sprachmodells zuschneiden. Die Belege der
+    # ratsuchenden Person haben Vorrang: Ohne sie ist keine Aussage zum
+    # konkreten Fall möglich, während Fachwissen nur die Einordnung liefert.
+    user_bewertet, verbleibend = _passe_in_kontext(user_bewertet, MAX_CONTEXT_CHARS)
+    fach_bewertet, _ = _passe_in_kontext(fach_bewertet, verbleibend)
 
     user_quellen = build_source_refs(user_bewertet, question, "nutzer", start=1)
     fach_quellen = build_source_refs(
@@ -1195,27 +1233,34 @@ QUICK_ACTIONS: Tuple[QuickAction, ...] = (
         prompt=(
             "Verfasse den Text eines Widerspruchsschreibens an die Pflegekasse. Es soll sich lesen wie "
             "ein Brief, den ein Mensch geschrieben hat – nicht wie eine Aufzählung von Argumenten.\n\n"
-            "Aufbau in ausformulierten Absätzen:\n"
-            "1. **Einleitung (2–3 Sätze):** Nenne den Bescheid mit Datum und die getroffene Einstufung. "
-            "Sage, dass dieser Einstufung widersprochen wird, und in einem Satz warum – weil der "
-            "tatsächliche Hilfebedarf nicht zutreffend erfasst wurde.\n"
-            "2. **Hauptteil:** Für jeden strittigen Punkt ein eigener, zusammenhängender Absatz in ganzen "
-            "Sätzen. Beschreibe darin nacheinander: was der Medizinische Dienst festgestellt hat, wie sich "
-            "die Lage nach den vorliegenden Unterlagen tatsächlich darstellt, und welche Bewertung nach den "
-            "Begutachtungs-Richtlinien daher angezeigt wäre. Führe konkrete Beobachtungen aus den Unterlagen "
-            "an (Beispiele, Häufigkeiten, Uhrzeiten), damit die Schilderung nachvollziehbar wird. "
-            "Verwende KEINE Zwischenüberschriften, KEINE Aufzählungszeichen und KEINE Spiegelstriche.\n"
-            "3. **Wurde ein Modul gar nicht bewertet**, obwohl die Unterlagen dazu etwas hergeben, weise "
-            "in einem eigenen Absatz ausdrücklich darauf hin – das ist häufig der stärkste Punkt.\n"
-            "4. **Schluss (2–3 Sätze):** Bitte um erneute Begutachtung, möglichst unter Einbeziehung der "
-            "beigefügten Unterlagen, und um eine Mitteilung über das weitere Vorgehen.\n\n"
+            "So soll der Text verlaufen – schreibe ihn als durchgehenden Fließtext ohne "
+            "Zwischenüberschriften und ohne Abschnittsbezeichnungen:\n\n"
+            "Beginne mit zwei bis drei Sätzen, die den Bescheid mit Datum und die getroffene Einstufung "
+            "nennen und sagen, dass dieser Einstufung widersprochen wird, weil der tatsächliche "
+            "Hilfebedarf nicht zutreffend erfasst wurde.\n\n"
+            "Widme danach jedem strittigen Punkt einen eigenen zusammenhängenden Absatz. Beschreibe darin "
+            "nacheinander, was der Medizinische Dienst festgestellt hat, wie sich die Lage nach den "
+            "vorliegenden Unterlagen tatsächlich darstellt, und welche Bewertung nach den "
+            "Begutachtungs-Richtlinien angezeigt wäre. Führe konkrete Beobachtungen aus den Unterlagen an "
+            "(Beispiele, Häufigkeiten, Uhrzeiten), damit die Schilderung nachvollziehbar wird.\n\n"
+            "Wurde ein Modul gar nicht bewertet, obwohl die Unterlagen dazu etwas hergeben, weise in einem "
+            "eigenen Absatz ausdrücklich darauf hin – das ist häufig der stärkste Punkt.\n\n"
+            "Schließe mit zwei bis drei Sätzen: Bitte um erneute Begutachtung unter Einbeziehung der "
+            "beigefügten Unterlagen und um Mitteilung über das weitere Vorgehen.\n\n"
             "Zwingende Vorgaben:\n"
             "- Schreibe NUR den Fließtext ab der Einleitung. Keine Anrede, keine Grußformel, kein Betreff, "
             "keine Absenderangaben, keine Unterschrift – das ergänzt die Briefvorlage automatisch.\n"
+            "- Setze KEINE Abschnittsmarken wie [Einleitung], [Hauptteil] oder [Schluss] in den Text und "
+            "keine Überschriften. Die Gliederung ergibt sich allein aus den Absätzen.\n"
             "- Sachlicher, höflicher Behördenton. Keine Vorwürfe, keine Ausrufezeichen.\n"
             "- Verwende KEINE Belegnummern und KEINE eckigen Klammern. Der Brief muss ohne Fußnoten lesbar sein.\n"
             "- Setze KEINE Platzhalter ein. Fehlt dir eine Zahl, formuliere den Satz ohne sie.\n"
             "- Behandle nur Punkte, zu denen du echte Belege hast. Erfinde nichts.\n"
+            "- Nenne NUR Punktzahlen, die wörtlich in den Unterlagen stehen. Schreibe niemals, wie viele "
+            "Punkte deiner Meinung nach angemessen wären – das entscheidet die Begutachtung. Formuliere "
+            "stattdessen, dass die Bewertung dem geschilderten Hilfebedarf nicht gerecht wird.\n"
+            "- Behaupte nur dann, ein Modul sei nicht bewertet worden, wenn es im Gutachten wirklich "
+            "fehlt. Prüfe das sorgfältig, bevor du es schreibst.\n"
             "- Schreibe nichts über Rechtsberatung, über künstliche Intelligenz oder Empfehlungen.\n"
             "- Stütze die Bewertung, die du für angezeigt hältst, auf die Kriterien der "
             "Begutachtungs-Richtlinien aus dem Fachwissen. Nenne sie im Fließtext, ohne Belegnummern "
