@@ -902,6 +902,16 @@ def generate_answer(suchfrage: str, anweisung: str, zusatzfragen=()) -> tuple[st
                 reranker=reranker, extra_queries=zusatzfragen,
             )
 
+        # Themenfremde Fragen gar nicht erst an das Sprachmodell geben. Es
+        # antwortet sonst mit dem, was zufällig im Kontext steht - bei der
+        # Frage nach dem Wetter kam der Inhalt des Pflegegutachtens heraus,
+        # samt Belegziffern. Nur bei freien Fragen prüfen: Die vorbereiteten
+        # Aufgaben sind immer im Thema, suchen aber breit über alle Module und
+        # erreichen deshalb nicht immer eine hohe Einzelbewertung.
+        if not zusatzfragen and ergebnis.themenfremd:
+            st.markdown(pflege_rag.ABLEHNUNG_THEMENFREMD)
+            return pflege_rag.ABLEHNUNG_THEMENFREMD, []
+
         # Die letzte Nachricht im Verlauf ist die Kurzfassung; für das
         # Sprachmodell wird sie durch die vollständige Anweisung ersetzt.
         verlauf = list(st.session_state.messages[:-1]) + [{"role": "user", "content": anweisung}]

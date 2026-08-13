@@ -52,18 +52,58 @@ EXCLUDED_FILES = {
     "MD_Sachsen-Anhalt_Gesundheitsdaten_REAL.pdf",
 }
 
-# Geprüfte Quellen: Behörden, Medizinischer Dienst, Verbraucherzentrale und
-# Sozialverbände. Bewusst keine Werbeseiten von Anbietern.
-# Gesetzestexte im Wortlaut. Damit kann der Assistent Paragrafen zitieren,
-# statt sie nur aus Ratgebertexten zu umschreiben.
-# § 14: Begriff der Pflegebedürftigkeit · § 15: Ermittlung des Pflegegrades
-# § 18: Verfahren zur Feststellung der Pflegebedürftigkeit
-SGB_XI_PARAGRAFEN = [14, 15, 18]
-SGB_XI_URL = "https://www.gesetze-im-internet.de/sgb_11/__{nummer}.html"
+# Gesetzestexte im Wortlaut, vom amtlichen Dienst des Bundesjustizministeriums.
+# Damit kann der Assistent Paragrafen zitieren, statt sie nur aus Ratgebertexten
+# zu umschreiben.
+GESETZ_URL = "https://www.gesetze-im-internet.de/{buch}/__{nummer}.html"
+
+# Die maßgeblichen Paragrafen im Wortlaut, je Gesetzbuch.
+#
+# Bis 2026-08-13 waren nur §§ 14, 15 und 18 SGB XI enthalten - also allein die
+# Begutachtung. Fragen zum Widerspruchsverfahren selbst (Frist, Form, Kosten,
+# Klage) ließen sich damit nicht belegen, obwohl die Anwendung genau dafür da
+# ist und die Frist sogar ausrechnet. Deshalb kommen das Sozialgerichtsgesetz
+# und das Verwaltungsverfahrensrecht des SGB X hinzu.
+GESETZE: dict[str, tuple[str, list[str]]] = {
+    # Pflegeversicherung: Begriff, Begutachtung, Leistungen
+    "SGB XI": ("sgb_11", [
+        "7a",   # Pflegeberatung
+        "14",   # Begriff der Pflegebedürftigkeit
+        "15",   # Ermittlung des Grades der Pflegebedürftigkeit
+        "17",   # Richtlinien der Pflegekassen
+        "18",   # Begutachtung und Feststellung
+        "33",   # Leistungsvoraussetzungen (Antrag)
+        "36",   # Pflegesachleistung
+        "37",   # Pflegegeld
+        "38",   # Kombinationsleistung
+        "39",   # Verhinderungspflege
+        "40",   # Pflegehilfsmittel
+        "41",   # Tagespflege und Nachtpflege
+        "42",   # Kurzzeitpflege
+        "43",   # Vollstationäre Pflege
+        "45b",  # Entlastungsbetrag
+    ]),
+    # Sozialgerichtsgesetz: das Widerspruchsverfahren
+    "SGG": ("sgg", [
+        "78",   # Vorverfahren - Nachprüfung des Verwaltungsakts
+        "83",   # Beginn des Vorverfahrens
+        "84",   # Widerspruchsfrist
+        "85",   # Widerspruchsbescheid
+        "87",   # Klagefrist
+        "88",   # Untätigkeitsklage
+    ]),
+    # SGB X: Verwaltungsverfahren, u. a. Bekanntgabe und Kosten
+    "SGB X": ("sgb_10", [
+        "37",   # Bekanntgabe - maßgeblich für den Fristbeginn
+        "41",   # Heilung von Verfahrensfehlern
+        "44",   # Rücknahme eines rechtswidrigen Verwaltungsakts
+        "63",   # Erstattung der Kosten im Vorverfahren
+    ]),
+}
 
 URLS_TO_LEARN = [
     # --- Amtliche Stellen ---
-    "https://www.bundesgesundheitsministerium.de/themen/pflege/pflegebeduerftigkeit/pflegegrade.html",
+    "https://www.bundesgesundheitsministerium.de/pflegegrade.html",
     "https://www.bundesgesundheitsministerium.de/themen/pflege/online-ratgeber-pflege/pflegebeduerftig-was-nun",
     "https://md-bund.de/themen/pflegebeduerftigkeit-und-pflegebegutachtung/das-begutachtungsinstrument.html",
     "https://md-bund.de/themen/pflegebeduerftigkeit-und-pflegebegutachtung/begutachtungs-richtlinien.html",
@@ -80,6 +120,18 @@ URLS_TO_LEARN = [
     "https://www.pflege.de/pflegende-angehoerige/pflegefall/pflegetagebuch/",
     "https://www.pflegeberatung.de/pflegeanspruch/begutachtung/das-begutachtungsinstrument",
     "https://www.pflege-betreuer.de/de/pflegewissen/pflegerecht-und-ansprueche/widerspruch-gegen-die-pflegegrad-einstufung-einlegen",
+
+    # --- Ergänzt am 2026-08-13 ---------------------------------------------
+    # Eine Prüfbatterie freier Fragen (pruefe_antworten.py) zeigte Lücken bei
+    # den Themen Ablauf des Widerspruchsverfahrens, Kosten, Klage, Leistungen
+    # und Höherstufung. Diese Seiten decken genau das ab.
+    "https://www.vdk.de/deutschland/pages/themen/pflege/85737/pflegegrad_abgelehnt_-_keine_angst_vor_widerspruch",
+    "https://www.betanet.de/pflegeantrag-und-pflegebegutachtung.html",
+    "https://www.betanet.de/widerspruch-im-sozialrecht.html",
+    "https://www.betanet.de/pflege-leistungen.html",
+    "https://www.bundesgesundheitsministerium.de/themen/pflege/online-ratgeber-pflege/pflegebeduerftig-was-nun/pflegebeduerftigkeit",
+    "https://www.pflege.de/pflegekasse-pflegerecht/pflegeleistungen/",
+    "https://www.bundesgesundheitsministerium.de/themen/pflege/online-ratgeber-pflege/leistungen-der-pflegeversicherung/leistungen-im-ueberblick",
 ]
 
 
@@ -187,7 +239,7 @@ def lade_pdf_dokumente() -> tuple[List[Document], List[IngestReport]]:
 
 
 def lade_gesetzestexte() -> tuple[List[Document], List[IngestReport]]:
-    """Holt die maßgeblichen Paragrafen des SGB XI im Wortlaut.
+    """Holt die maßgeblichen Paragrafen im Wortlaut.
 
     Als Quelle wird der amtliche Dienst des Bundesjustizministeriums verwendet.
     Jeder Paragraf wird ein eigenes Dokument, damit die Quellenangabe später
@@ -199,23 +251,41 @@ def lade_gesetzestexte() -> tuple[List[Document], List[IngestReport]]:
     dokumente: List[Document] = []
     berichte: List[IngestReport] = []
 
-    for nummer in SGB_XI_PARAGRAFEN:
-        bezeichnung = f"§ {nummer} SGB XI"
+    auftraege = [
+        (gesetz, buch, nummer)
+        for gesetz, (buch, paragrafen) in GESETZE.items()
+        for nummer in paragrafen
+    ]
+
+    for gesetz, buch, nummer in auftraege:
+        bezeichnung = f"§ {nummer} {gesetz}"
         bericht = IngestReport(name=bezeichnung)
         start = time.time()
         try:
-            antwort = requests.get(SGB_XI_URL.format(nummer=nummer), timeout=30)
+            antwort = requests.get(GESETZ_URL.format(buch=buch, nummer=nummer), timeout=30)
             antwort.encoding = "utf-8"
             suppe = BeautifulSoup(antwort.text, "html.parser")
             inhalt = suppe.find("div", class_="jnhtml") or suppe.find("div", id="paddingLR12")
-            ueberschrift = suppe.find("h1")
             text = pflege_rag.clean_text(inhalt.get_text("\n", strip=True)) if inhalt else ""
             bericht.zeichen = len(text)
 
-            if bericht.zeichen < 300:
-                bericht.fehler = "Kein Gesetzestext gefunden – Aufbau der Seite geändert?"
+            # Nicht über die Länge prüfen, sondern über die Kennzeichnung:
+            # § 83 SGG besteht aus einem einzigen Satz mit 59 Zeichen und wäre
+            # jeder vernünftigen Untergrenze zum Opfer gefallen. Der Dienst
+            # nennt die Paragrafennummer in einem eigenen Element - stimmt sie
+            # mit der angeforderten überein, ist die richtige Seite geladen.
+            kennung = suppe.find("span", class_="jnenbez")
+            gefunden = kennung.get_text(strip=True) if kennung else ""
+            if not text or gefunden != f"§ {nummer}":
+                bericht.fehler = (
+                    f"Erwartet „§ {nummer}“, gefunden „{gefunden or 'nichts'}“ – "
+                    "Aufbau der Seite geändert?"
+                )
             else:
-                titel = ueberschrift.get_text(strip=True) if ueberschrift else bezeichnung
+                # Die Paragrafenüberschrift ("Widerspruchsfrist") steht in
+                # einem eigenen Element; fehlt sie, genügt die Bezeichnung.
+                titelmarke = suppe.find("span", class_="jnentitel")
+                titel = (titelmarke.get_text(strip=True) if titelmarke else "") or bezeichnung
                 dokumente.append(
                     Document(
                         page_content=f"# {bezeichnung} – {titel}\n\n{text}",
@@ -246,6 +316,23 @@ def lade_webseiten() -> tuple[List[Document], List[IngestReport]]:
         bericht = IngestReport(name=url)
         start = time.time()
         try:
+            # Erst den Statuscode prüfen, dann den Inhalt holen.
+            #
+            # Ohne diese Prüfung landen Fehlerseiten als Fachwissen in der
+            # Datenbank: Beim Ergänzen neuer Adressen am 2026-08-13 lieferten
+            # vier von neun eine 404 - mit 846 bis 8136 Zeichen Text. Die
+            # längeren davon hätten die bisherige Mindestlänge mühelos
+            # überschritten und wären als Quelle zitierbar gewesen.
+            import requests
+            kopf = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            antwort = requests.head(url, timeout=25, headers=kopf, allow_redirects=True)
+            if antwort.status_code >= 400:
+                # Manche Server beantworten HEAD nicht richtig; dann noch einmal
+                # richtig anfragen, bevor die Seite verworfen wird.
+                antwort = requests.get(url, timeout=25, headers=kopf)
+            if antwort.status_code >= 400:
+                raise RuntimeError(f"HTTP {antwort.status_code}")
+
             geladen = WebBaseLoader(url).load()
             text = pflege_rag.clean_text("\n".join(d.page_content for d in geladen))
             bericht.zeichen = len(text)

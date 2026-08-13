@@ -840,6 +840,27 @@ Verfahrenswege, Zuständigkeiten, Fristen oder Zahlen aus eigenem Wissen.
 # Ab dieser Bewertung gilt ein Treffer als tragfähig.
 STRONG_EVIDENCE_SCORE = 0.30
 
+# Unterhalb dieser Bewertung hat die Frage mit dem Thema nichts zu tun.
+#
+# Gemessen am 2026-08-13 über die Wissensbasis UND die Unterlagen des
+# Beispielfalls: Berechtigte Fragen erreichten mindestens 0,259 - auch solche
+# nach Einzelheiten aus den eigenen Unterlagen ("Welchen Pflegegrad hat …
+# bekommen?"). Themenfremde Fragen (Wetter, Käsekuchen, Quantenphysik)
+# erreichten höchstens 0,012. Die Schwelle liegt achtfach über dem höchsten
+# Fehlalarm und weit unter der niedrigsten echten Frage.
+#
+# Ohne diese Prüfung beantwortete das Modell "Wie ist das Wetter in Berlin?"
+# mit dem Inhalt des Pflegegutachtens - samt Belegziffern, was der Antwort
+# den Anschein von Verlässlichkeit gab.
+THEMENSCHWELLE = 0.10
+
+ABLEHNUNG_THEMENFREMD = (
+    "Tut mir leid, das kann ich nicht beantworten. Bitte nur Fragen zum Sachverhalt stellen.\n\n"
+    "Ich kann Ihnen zu Ihren hochgeladenen Unterlagen und zum Pflegegrad-Widerspruch "
+    "weiterhelfen – etwa zur Begutachtung, zu den sechs Modulen, zu Fristen oder zur "
+    "Begründung Ihres Widerspruchs."
+)
+
 
 @dataclass
 class RetrievalResult:
@@ -857,6 +878,16 @@ class RetrievalResult:
     def belege_tragfaehig(self) -> bool:
         """Ob mindestens ein Treffer die Frage wirklich abdeckt."""
         return self.beste_bewertung >= STRONG_EVIDENCE_SCORE
+
+    @property
+    def themenfremd(self) -> bool:
+        """Ob die Frage außerhalb des Sachverhalts liegt.
+
+        Weder die Wissensbasis noch die hochgeladenen Unterlagen enthalten
+        etwas, das zur Frage passt. Das Sprachmodell würde in diesem Fall
+        trotzdem antworten - mit dem, was gerade im Kontext steht.
+        """
+        return self.beste_bewertung < THEMENSCHWELLE
 
 
 # Zusatzfragen, die bei einer modulweisen Analyse mitgesucht werden. So kommen

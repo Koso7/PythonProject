@@ -282,6 +282,20 @@ def beantworte(
         extra_queries=zusatzfragen,
     )
 
+    # Themenfremde Fragen gar nicht erst an das Sprachmodell geben - es
+    # antwortet sonst mit dem, was zufällig im Kontext steht. Nur bei freien
+    # Fragen prüfen: Die vorbereiteten Aufgaben sind immer im Thema.
+    if not zusatzfragen and ergebnis.themenfremd:
+        yield {
+            "art": "ergebnis",
+            "antwort": pflege_rag.ABLEHNUNG_THEMENFREMD,
+            "quellen": [],
+            "suchfrage": eigenstaendig,
+            "umformuliert": eigenstaendig != frage,
+            "ohne_beleg": False,
+        }
+        return
+
     yield {"art": "status", "text": "Die Antwort wird geschrieben …"}
     nachrichten = pflege_rag.build_messages(
         ergebnis.system_prompt, list(verlauf) + [{"role": "user", "content": anweisung}]

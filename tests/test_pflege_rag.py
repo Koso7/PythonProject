@@ -433,3 +433,49 @@ class TestZeilenschnitt:
         import pflege_service as dienst
 
         assert dienst._zeilenschnitt("nur eine Zeile", 2) == 0
+
+
+class TestThemenfremd:
+    """Fragen ohne Bezug zum Sachverhalt dürfen nicht beantwortet werden.
+
+    Belegt am 2026-08-13: Auf „Wie ist das Wetter aktuell in Berlin?“ gab der
+    Assistent den Inhalt des Pflegegutachtens wieder - mit Belegziffern, was
+    der Antwort den Anschein von Verlässlichkeit gab. Das Sprachmodell
+    antwortet immer mit dem, was im Kontext steht; die Entscheidung, ob eine
+    Frage überhaupt hierher gehört, muss deshalb davor fallen.
+
+    Die Schwelle stammt aus einer Messung über Wissensbasis und Beispielfall:
+    berechtigte Fragen ab 0,259, themenfremde höchstens 0,012.
+    """
+
+    def ergebnis(self, bewertung: float) -> rag.RetrievalResult:
+        return rag.RetrievalResult(system_prompt="", beste_bewertung=bewertung)
+
+    @pytest.mark.parametrize("bewertung", [0.0, 0.005, 0.012, 0.05, 0.099])
+    def test_niedrige_bewertung_gilt_als_themenfremd(self, bewertung):
+        assert self.ergebnis(bewertung).themenfremd
+
+    @pytest.mark.parametrize("bewertung", [0.10, 0.259, 0.42, 0.86, 0.999])
+    def test_echte_fragen_gelten_nicht_als_themenfremd(self, bewertung):
+        assert not self.ergebnis(bewertung).themenfremd
+
+    def test_schwelle_liegt_zwischen_den_gemessenen_gruppen(self):
+        hoechster_fehlalarm = 0.012
+        niedrigste_echte_frage = 0.259
+        assert hoechster_fehlalarm < rag.THEMENSCHWELLE < niedrigste_echte_frage
+
+    def test_ablehnung_nennt_den_vom_nutzer_gewuenschten_wortlaut(self):
+        assert rag.ABLEHNUNG_THEMENFREMD.startswith(
+            "Tut mir leid, das kann ich nicht beantworten."
+        )
+        assert "nur Fragen zum Sachverhalt" in rag.ABLEHNUNG_THEMENFREMD
+
+    def test_tragfaehigkeit_bleibt_die_strengere_huerde(self):
+        """Themenfremd und „ohne tragfähigen Beleg“ sind zwei Stufen.
+
+        Eine Frage kann zum Thema gehören und trotzdem zu dünn belegt sein -
+        dann kommt die Warnung, nicht die Ablehnung.
+        """
+        knapp_im_thema = self.ergebnis(0.15)
+        assert not knapp_im_thema.themenfremd
+        assert not knapp_im_thema.belege_tragfaehig
