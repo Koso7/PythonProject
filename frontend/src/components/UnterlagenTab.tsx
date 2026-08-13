@@ -1,17 +1,9 @@
-/** Unterlagen hochladen und verwalten. */
+/** Reiter 1: Unterlagen hochladen und verwalten. */
 import { useRef, useState } from "react";
 import { ApiFehler, unterlageEntfernen, unterlagenHochladen, type UploadErgebnis } from "../api";
-import { Hinweis, Karte, Leerbereich } from "./Bausteine";
-import { Symbol } from "./Symbole";
+import { Hinweis } from "./Bausteine";
 
 const MAX_MB = 30;
-
-const EMPFEHLUNGEN = [
-  ["Pflegegradbescheid", "Die Entscheidung der Pflegekasse, gegen die sich der Widerspruch richtet."],
-  ["Gutachten des Medizinischen Dienstes", "Das wichtigste Dokument – daraus stammen die Einzelpunkte je Modul."],
-  ["Pflegetagebuch", "Belegt den tatsächlichen Hilfebedarf über mehrere Tage."],
-  ["Arzt- und Krankenhausberichte", "Diagnosen und Befunde, die im Gutachten fehlen könnten."],
-];
 
 export function UnterlagenTab({
   token,
@@ -26,12 +18,7 @@ export function UnterlagenTab({
   const [laeuft, setLaeuft] = useState(false);
   const [ergebnisse, setErgebnisse] = useState<UploadErgebnis[]>([]);
   const [fehler, setFehler] = useState("");
-  const [ueberAblage, setUeberAblage] = useState(false);
   const dateifeld = useRef<HTMLInputElement>(null);
-
-  function auswaehlen(dateien: FileList | null) {
-    setAuswahl(Array.from(dateien ?? []).filter((d) => d.type === "application/pdf"));
-  }
 
   async function einlesen() {
     if (auswahl.length === 0) return;
@@ -64,163 +51,108 @@ export function UnterlagenTab({
   const misslungene = ergebnisse.filter((e) => !e.erfolgreich);
 
   return (
-    <div className="spalten zwei-schmal">
-      <div className="stapel">
-        <Karte
-          titel="Unterlagen hinzufügen"
-          symbol="hochladen"
-          fuss={`Zulässig sind PDF-Dateien bis ${MAX_MB} MB je Datei. Mehrere Dateien lassen sich gleichzeitig auswählen.`}
-        >
-          {/* Die Fläche ist zugleich Ablage und Auslöser für die Dateiauswahl.
-              Das Eingabefeld bleibt bedienbar - nur unsichtbar -, damit
-              Tastatur und Vorleseprogramme unverändert funktionieren. */}
-          <div
-            className={`ablage${ueberAblage || auswahl.length > 0 ? " bereit" : ""}`}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setUeberAblage(true);
-            }}
-            onDragLeave={() => setUeberAblage(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setUeberAblage(false);
-              auswaehlen(e.dataTransfer.files);
-            }}
-          >
-            <Symbol name="hochladen" groesse={34} />
-            <div className="ablage-titel">Dateien hierher ziehen</div>
-            <div className="ablage-text">oder unten auswählen – nur PDF</div>
+    <section aria-labelledby="unterlagen-titel">
+      <h2 id="unterlagen-titel">Schritt 1 – Ihre Unterlagen hochladen</h2>
+      <p>
+        Laden Sie alle Unterlagen hoch, die für den Widerspruch wichtig sind. Sie können{" "}
+        <strong>mehrere Dateien gleichzeitig</strong> auswählen.
+      </p>
 
-            <div className="feld" style={{ marginTop: "var(--a4)", marginBottom: 0 }}>
-              <label htmlFor="dateiwahl" className="nur-vorlesen">
-                Dateien auswählen
-              </label>
-              <input
-                id="dateiwahl"
-                ref={dateifeld}
-                type="file"
-                accept="application/pdf"
-                multiple
-                onChange={(e) => auswaehlen(e.target.files)}
-              />
-            </div>
-          </div>
+      <Hinweis>
+        <strong>Besonders hilfreich:</strong> der Pflegegradbescheid, das Gutachten des
+        Medizinischen Dienstes, Ihr Pflegetagebuch sowie Arzt- und Krankenhausberichte.
+      </Hinweis>
 
-          {auswahl.length > 0 && (
-            <div style={{ marginTop: "var(--a4)" }}>
-              <Hinweis art="erfolg">
-                <strong>{auswahl.length} Datei(en) ausgewählt.</strong> Klicken Sie jetzt auf
-                „Unterlagen einlesen“.
-              </Hinweis>
-            </div>
-          )}
+      <details>
+        <summary>🔒 Datenschutzhinweis – bitte einmal lesen</summary>
+        <p>
+          <strong>Was mit Ihren Unterlagen passiert:</strong> Ihre Dateien werden ausschließlich
+          auf diesem Rechner gelesen und ausgewertet. Sie werden <strong>nicht</strong> an ein
+          Unternehmen im Internet übertragen und <strong>nicht</strong> zum Trainieren von
+          künstlicher Intelligenz verwendet. Auch das Sprachmodell läuft örtlich.
+        </p>
+        <p>
+          <strong>Wie gespeichert wird:</strong> Ihr Arbeitsstand bleibt nur erhalten, solange Sie
+          Ihren Zugangscode haben. Alles Gespeicherte ist verschlüsselt; ohne den Code kann
+          niemand darauf zugreifen.
+        </p>
+        <p>
+          <strong>Wie gelöscht wird:</strong> Spätestens 4 Wochen nach Beginn wird die Sitzung
+          vollständig gelöscht. Im Reiter <strong>Einstellungen</strong> können Sie jederzeit
+          sofort selbst löschen.
+        </p>
+      </details>
 
-          <button
-            className="knopf haupt breit"
-            style={{ marginTop: "var(--a4)" }}
-            onClick={einlesen}
-            disabled={auswahl.length === 0 || laeuft}
-          >
-            <Symbol name="hochladen" groesse={18} />
-            {laeuft ? "Die Unterlagen werden gelesen …" : "Unterlagen einlesen"}
-          </button>
+      <p>
+        <strong>Zulässig:</strong> PDF-Dateien, höchstens {MAX_MB} MB je Datei.
+      </p>
 
-          {laeuft && (
-            <p className="hilfe" role="status" style={{ marginTop: "var(--a3)" }}>
-              Eingescannte Unterlagen brauchen Texterkennung. Das kann eine Minute je Datei dauern –
-              bitte lassen Sie das Fenster offen.
-            </p>
-          )}
+      <div className="feld">
+        <label htmlFor="dateiwahl">Dateien auswählen</label>
+        <input
+          id="dateiwahl"
+          ref={dateifeld}
+          type="file"
+          accept="application/pdf"
+          multiple
+          onChange={(e) => setAuswahl(Array.from(e.target.files ?? []))}
+        />
+      </div>
 
-          {fehler && (
-            <div style={{ marginTop: "var(--a4)" }}>
-              <Hinweis art="fehler">{fehler}</Hinweis>
-            </div>
-          )}
-          {erfolgreiche.length > 0 && (
-            <div style={{ marginTop: "var(--a4)" }}>
-              <Hinweis art="erfolg">
-                <strong>{erfolgreiche.length} Dokument(e) eingelesen</strong> – daraus{" "}
-                {erfolgreiche.reduce((summe, e) => summe + e.abschnitte, 0)} durchsuchbare
-                Textabschnitte. Weiter geht es beim <strong>KI-Assistenten</strong>.
-              </Hinweis>
-            </div>
-          )}
-          {misslungene.map((e) => (
-            <div style={{ marginTop: "var(--a3)" }} key={e.dateiname}>
-              <Hinweis art="warnung">
-                <strong>„{e.dateiname}“:</strong> {e.hinweis}
-              </Hinweis>
-            </div>
+      {auswahl.length > 0 && (
+        <Hinweis art="erfolg">
+          <strong>{auswahl.length} Datei(en) ausgewählt.</strong> Klicken Sie jetzt auf
+          „Unterlagen einlesen“.
+        </Hinweis>
+      )}
+
+      <button className="knopf haupt" onClick={einlesen} disabled={auswahl.length === 0 || laeuft}>
+        {laeuft ? "Die Unterlagen werden gelesen …" : "📥 Unterlagen einlesen"}
+      </button>
+
+      {laeuft && (
+        <p role="status" style={{ marginTop: "0.8rem" }}>
+          Eingescannte Unterlagen brauchen Texterkennung, das kann eine Minute je Datei dauern.
+        </p>
+      )}
+
+      {fehler && <Hinweis art="fehler">{fehler}</Hinweis>}
+
+      {erfolgreiche.length > 0 && (
+        <Hinweis art="erfolg">
+          <strong>{erfolgreiche.length} Dokument(e) eingelesen</strong>, daraus{" "}
+          {erfolgreiche.reduce((summe, e) => summe + e.abschnitte, 0)} durchsuchbare
+          Textabschnitte. Weiter geht es im Reiter „KI-Assistent“.
+        </Hinweis>
+      )}
+      {misslungene.map((e) => (
+        <Hinweis art="warnung" key={e.dateiname}>
+          „{e.dateiname}“: {e.hinweis}
+        </Hinweis>
+      ))}
+
+      <h3 style={{ marginTop: "1.5rem" }}>Eingelesene Unterlagen</h3>
+      {dokumente.length === 0 ? (
+        <Hinweis>
+          Noch keine Unterlagen vorhanden. Ohne Unterlagen kann der Assistent Ihren Fall nicht
+          prüfen.
+        </Hinweis>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0 }}>
+          {dokumente.map((name) => (
+            <li
+              key={name}
+              className="karte"
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}
+            >
+              <span>📄 {name}</span>
+              <button className="knopf gefahr" onClick={() => entfernen(name)}>
+                Entfernen
+              </button>
+            </li>
           ))}
-        </Karte>
-
-        <Karte titel={`Eingelesene Unterlagen (${dokumente.length})`} symbol="unterlagen">
-          {dokumente.length === 0 ? (
-            <Leerbereich
-              symbol="unterlagen"
-              titel="Noch keine Unterlagen"
-              text="Ohne Unterlagen kann der Assistent Ihren Fall nicht prüfen. Am wichtigsten sind der Bescheid und das Gutachten des Medizinischen Dienstes."
-            />
-          ) : (
-            <ul className="dateiliste">
-              {dokumente.map((name) => (
-                <li className="dateizeile" key={name}>
-                  <Symbol name="datei" />
-                  <span className="dateiname">{name}</span>
-                  <button
-                    className="knopf klein gefahr"
-                    onClick={() => entfernen(name)}
-                    aria-label={`${name} entfernen`}
-                  >
-                    <Symbol name="papierkorb" groesse={16} />
-                    Entfernen
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Karte>
-      </div>
-
-      <div className="stapel">
-        <Karte titel="Was hilft dem Assistenten?" symbol="info">
-          <ul className="dateiliste">
-            {EMPFEHLUNGEN.map(([titel, text]) => (
-              <li className="dateizeile" key={titel} style={{ alignItems: "flex-start" }}>
-                <span style={{ color: "var(--erfolg-700)", marginTop: "0.1rem" }}>
-                  <Symbol name="haken" groesse={18} />
-                </span>
-                <span style={{ minWidth: 0 }}>
-                  <span className="dateiname">{titel}</span>
-                  <span className="hilfe" style={{ marginTop: 0 }}>
-                    {text}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Karte>
-
-        <Karte titel="Was mit Ihren Unterlagen geschieht" symbol="schild">
-          <p style={{ fontSize: "0.92rem", color: "var(--gedaempft)" }}>
-            <strong style={{ color: "var(--text)" }}>Verarbeitung:</strong> Ihre Dateien werden
-            ausschließlich auf diesem Rechner gelesen und ausgewertet. Sie werden nicht an ein
-            Unternehmen im Internet übertragen und nicht zum Trainieren künstlicher Intelligenz
-            verwendet. Auch das Sprachmodell läuft örtlich.
-          </p>
-          <p style={{ fontSize: "0.92rem", color: "var(--gedaempft)" }}>
-            <strong style={{ color: "var(--text)" }}>Speicherung:</strong> Der Arbeitsstand bleibt
-            nur erhalten, solange Sie Ihren Zugangscode haben. Alles Gespeicherte ist verschlüsselt.
-            Die Suchdaten Ihrer Unterlagen liegen ausschließlich im Arbeitsspeicher.
-          </p>
-          <p style={{ fontSize: "0.92rem", color: "var(--gedaempft)" }}>
-            <strong style={{ color: "var(--text)" }}>Löschung:</strong> Spätestens vier Wochen nach
-            Beginn wird die Sitzung vollständig gelöscht. Unter <strong>Einstellungen</strong>{" "}
-            können Sie jederzeit sofort selbst löschen.
-          </p>
-        </Karte>
-      </div>
-    </div>
+        </ul>
+      )}
+    </section>
   );
 }

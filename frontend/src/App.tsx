@@ -2,14 +2,10 @@
  * Pflegehilfe Online – Oberfläche.
  *
  * Gestaltungsleitlinien (nach Don Norman):
- *  Sichtbarkeit  – Seitenleiste, Kopfleiste und Fortschritt zeigen jederzeit
- *                  den Stand: wo man ist, was vorliegt, wie lange noch.
- *  Rückmeldung   – jede Aktion meldet sich sofort zurück, auch die langen.
- *  Constraints   – was noch nicht möglich ist, bleibt gesperrt und erklärt sich,
- *                  statt kommentarlos ins Leere zu führen.
- *  Mapping       – die Reihenfolge der Bereiche ist die Reihenfolge der Arbeit.
- *  Affordances   – Karten, Ablageflächen und Schaltflächen sehen aus wie das,
- *                  was man mit ihnen tun kann.
+ *  Sichtbarkeit  – Kopfzeile und Fortschrittsanzeige zeigen jederzeit den Stand.
+ *  Rückmeldung   – jede Aktion meldet sich sofort zurück.
+ *  Constraints   – was noch nicht möglich ist, bleibt gesperrt und erklärt sich.
+ *  Mapping       – die Reihenfolge der Reiter entspricht der Reihenfolge der Arbeit.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -20,15 +16,11 @@ import {
   type Perspektive,
   type Quelle,
 } from "./api";
-import { Hinweis } from "./components/Bausteine";
+import { Fortschritt, Hinweis } from "./components/Bausteine";
 import { BriefTab } from "./components/BriefTab";
 import { ChatTab } from "./components/ChatTab";
 import { EinstellungenTab } from "./components/EinstellungenTab";
-import { QuellenTab } from "./components/QuellenTab";
-import { Schale, type Bereich } from "./components/Schale";
 import { Startseite } from "./components/Startseite";
-import { Symbol } from "./components/Symbole";
-import { Uebersicht } from "./components/Uebersicht";
 import { UnterlagenTab } from "./components/UnterlagenTab";
 
 const SPEICHER_TOKEN = "pflegehilfe.token";
@@ -41,24 +33,31 @@ const LEERE_ANGABEN: Briefangaben = {
   anlagen: "",
 };
 
+type Reiter = "unterlagen" | "chat" | "brief" | "einstellungen";
+
+const REITER: { schluessel: Reiter; beschriftung: string }[] = [
+  { schluessel: "unterlagen", beschriftung: "📁 Unterlagen" },
+  { schluessel: "chat", beschriftung: "💬 KI-Assistent" },
+  { schluessel: "brief", beschriftung: "📄 PDF erstellen" },
+  { schluessel: "einstellungen", beschriftung: "⚙️ Einstellungen" },
+];
+
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [ablauf, setAblauf] = useState("");
-  const [bereich, setBereich] = useState<Bereich>("uebersicht");
+  const [reiter, setReiter] = useState<Reiter>("unterlagen");
 
   const [dokumente, setDokumente] = useState<string[]>([]);
   const [verlauf, setVerlauf] = useState<Nachricht[]>([]);
   const [quellen, setQuellen] = useState<Quelle[]>([]);
   const [entwurf, setEntwurf] = useState("");
   const [angaben, setAngaben] = useState<Briefangaben>(LEERE_ANGABEN);
-  const [fristZugang, setFristZugang] = useState("");
   const [pdfFertig, setPdfFertig] = useState(false);
 
   const [schriftgroesse, setSchriftgroesse] = useState(18);
   const [hoherKontrast, setHoherKontrast] = useState(false);
   const [geloescht, setGeloescht] = useState(false);
   const [ladefehler, setLadefehler] = useState("");
-  const [kopiert, setKopiert] = useState(false);
 
   // Darstellungswünsche auf das Dokument anwenden.
   useEffect(() => {
@@ -77,8 +76,6 @@ export default function App() {
     );
     const brief = daten.brief as Partial<Briefangaben> | undefined;
     if (brief) setAngaben({ ...LEERE_ANGABEN, ...brief });
-    const frist = daten.frist as { zugang?: string } | undefined;
-    if (frist?.zugang) setFristZugang(frist.zugang);
     const darstellung = daten.darstellung as { schrift?: number; kontrast?: boolean } | undefined;
     if (darstellung?.schrift) setSchriftgroesse(darstellung.schrift);
     if (darstellung?.kontrast !== undefined) setHoherKontrast(darstellung.kontrast);
@@ -102,7 +99,6 @@ export default function App() {
       setToken(neuerToken);
       setAblauf(neuerAblauf);
       setGeloescht(false);
-      setBereich("uebersicht");
       sessionStorage.setItem(SPEICHER_TOKEN, neuerToken);
       try {
         const sitzung = await sitzungLaden(neuerToken);
@@ -124,14 +120,13 @@ export default function App() {
           sitzungSpeichern(token, {
             ...(sitzung.data ?? {}),
             brief: angaben,
-            frist: { zugang: fristZugang },
             darstellung: { schrift: schriftgroesse, kontrast: hoherKontrast },
           }),
         )
         .catch(() => undefined);
     }, 800);
     return () => clearTimeout(zeitgeber);
-  }, [token, angaben, fristZugang, schriftgroesse, hoherKontrast]);
+  }, [token, angaben, schriftgroesse, hoherKontrast]);
 
   const abmelden = useCallback(() => {
     sessionStorage.removeItem(SPEICHER_TOKEN);
@@ -141,14 +136,12 @@ export default function App() {
     setQuellen([]);
     setEntwurf("");
     setAngaben(LEERE_ANGABEN);
-    setFristZugang("");
     setPdfFertig(false);
-    setBereich("uebersicht");
+    setReiter("unterlagen");
   }, []);
 
-  const schritte = useMemo(() => {
-    const hatAuswertung = verlauf.some((n) => n.role === "assistant");
-    return [
+  const schritte = useMemo(
+    () => [
       {
         titel: "Unterlagen hochladen",
         fertig: dokumente.length > 0,
@@ -156,22 +149,23 @@ export default function App() {
       },
       {
         titel: "Mit dem Assistenten prüfen",
-        fertig: hatAuswertung,
-        status: hatAuswertung ? "Auswertung liegt vor" : "noch offen",
+        fertig: verlauf.some((n) => n.role === "assistant"),
+        status: verlauf.some((n) => n.role === "assistant") ? "Auswertung liegt vor" : "noch offen",
       },
       {
         titel: "Widerspruch als PDF",
         fertig: pdfFertig,
         status: pdfFertig ? "PDF erstellt" : "noch offen",
       },
-    ];
-  }, [dokumente, verlauf, pdfFertig]);
+    ],
+    [dokumente, verlauf, pdfFertig],
+  );
 
   if (!token) {
     return (
       <>
         {geloescht && (
-          <div style={{ padding: "var(--a4) var(--a4) 0", maxWidth: "60rem", margin: "0 auto" }}>
+          <div className="huelle" style={{ paddingBottom: 0 }}>
             <Hinweis art="erfolg">
               <strong>Alle Ihre Daten wurden vollständig gelöscht.</strong> Vielen Dank für Ihr
               Vertrauen.
@@ -188,91 +182,86 @@ export default function App() {
     : null;
 
   return (
-    <Schale
-      bereich={bereich}
-      wechseln={setBereich}
-      anzahlUnterlagen={dokumente.length}
-      anzahlQuellen={quellen.length}
-      tageGueltig={tage}
-      kopfWerkzeuge={
-        <button
-          className="knopf klein"
-          onClick={() => {
-            navigator.clipboard?.writeText(token);
-            setKopiert(true);
-            setTimeout(() => setKopiert(false), 2500);
-          }}
-          title="Ihren Zugangscode in die Zwischenablage kopieren"
-        >
-          <Symbol name={kopiert ? "haken" : "schluessel"} groesse={16} />
-          {kopiert ? "Kopiert" : "Zugangscode"}
-        </button>
-      }
-    >
+    <div className="huelle">
+      <header className="kopf">
+        <h1 className="kopf-titel">⚖️ Pflegehilfe Online</h1>
+        <div className="plaketten">
+          <span className="plakette aktiv">Sitzung aktiv</span>
+          {tage !== null && <span className="plakette">noch {tage} Tage gültig</span>}
+          <span className={`plakette ${dokumente.length > 0 ? "aktiv" : "offen"}`}>
+            {dokumente.length > 0 ? `${dokumente.length} Unterlage(n)` : "keine Unterlagen"}
+          </span>
+        </div>
+      </header>
+
+      <Fortschritt schritte={schritte} />
+
       {ladefehler && <Hinweis art="warnung">{ladefehler}</Hinweis>}
 
-      {bereich === "uebersicht" && (
-        <Uebersicht
-          dokumente={dokumente}
-          verlauf={verlauf}
-          quellen={quellen}
-          angaben={angaben}
-          fristZugang={fristZugang}
-          setFristZugang={setFristZugang}
-          schritte={schritte}
-          wechseln={setBereich}
-        />
-      )}
+      <div className="reiter" role="tablist" aria-label="Arbeitsschritte">
+        {REITER.map((eintrag) => (
+          <button
+            key={eintrag.schluessel}
+            role="tab"
+            aria-selected={reiter === eintrag.schluessel}
+            aria-controls={`bereich-${eintrag.schluessel}`}
+            id={`reiter-${eintrag.schluessel}`}
+            onClick={() => setReiter(eintrag.schluessel)}
+          >
+            {eintrag.beschriftung}
+          </button>
+        ))}
+      </div>
 
-      {bereich === "unterlagen" && (
-        <UnterlagenTab token={token} dokumente={dokumente} setDokumente={setDokumente} />
-      )}
+      <div id={`bereich-${reiter}`} role="tabpanel" aria-labelledby={`reiter-${reiter}`}>
+        {reiter === "unterlagen" && (
+          <UnterlagenTab token={token} dokumente={dokumente} setDokumente={setDokumente} />
+        )}
+        {reiter === "chat" && (
+          <ChatTab
+            token={token}
+            hatUnterlagen={dokumente.length > 0}
+            verlauf={verlauf}
+            setVerlauf={setVerlauf}
+            quellen={quellen}
+            setQuellen={setQuellen}
+            perspektive={angaben.perspektive as Perspektive}
+            versicherteName={angaben.versichert_name}
+            verhaeltnis={angaben.verhaeltnis}
+            entwurfGesetzt={setEntwurf}
+          />
+        )}
+        {reiter === "brief" && (
+          <BriefTab
+            token={token}
+            angaben={angaben}
+            setAngaben={setAngaben}
+            entwurf={entwurf}
+            pdfErzeugt={() => setPdfFertig(true)}
+          />
+        )}
+        {reiter === "einstellungen" && (
+          <EinstellungenTab
+            token={token}
+            ablauf={ablauf}
+            setAblauf={setAblauf}
+            schriftgroesse={schriftgroesse}
+            setSchriftgroesse={setSchriftgroesse}
+            hoherKontrast={hoherKontrast}
+            setHoherKontrast={setHoherKontrast}
+            abmelden={abmelden}
+            geloescht={() => {
+              setGeloescht(true);
+              abmelden();
+            }}
+          />
+        )}
+      </div>
 
-      {bereich === "assistent" && (
-        <ChatTab
-          token={token}
-          hatUnterlagen={dokumente.length > 0}
-          verlauf={verlauf}
-          setVerlauf={setVerlauf}
-          quellen={quellen}
-          setQuellen={setQuellen}
-          perspektive={angaben.perspektive as Perspektive}
-          versicherteName={angaben.versichert_name}
-          verhaeltnis={angaben.verhaeltnis}
-          entwurfGesetzt={setEntwurf}
-          zuUnterlagen={() => setBereich("unterlagen")}
-        />
-      )}
-
-      {bereich === "quellen" && <QuellenTab quellen={quellen} />}
-
-      {bereich === "brief" && (
-        <BriefTab
-          token={token}
-          angaben={angaben}
-          setAngaben={setAngaben}
-          entwurf={entwurf}
-          pdfErzeugt={() => setPdfFertig(true)}
-          zumAssistenten={() => setBereich("assistent")}
-        />
-      )}
-
-      {bereich === "einstellungen" && (
-        <EinstellungenTab
-          token={token}
-          ablauf={ablauf}
-          setAblauf={setAblauf}
-          schriftgroesse={schriftgroesse}
-          setSchriftgroesse={setSchriftgroesse}
-          hoherKontrast={hoherKontrast}
-          setHoherKontrast={setHoherKontrast}
-          abmelden={abmelden}
-          geloescht={() => {
-            setGeloescht(true);
-            abmelden();
-          }}
-        />
-      )}
-    </Schale>
+      <footer className="fusszeile">
+        Dieser Assistent ersetzt keine Rechtsberatung. Alle erstellten Texte müssen vor dem
+        Absenden geprüft werden. Die Verarbeitung findet ausschließlich örtlich statt.
+      </footer>
+    </div>
   );
 }

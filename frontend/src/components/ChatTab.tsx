@@ -1,4 +1,4 @@
-/** Gespräch mit dem Assistenten. */
+/** Reiter 2: Gespräch mit dem Assistenten. */
 import { useEffect, useRef, useState } from "react";
 import {
   ApiFehler,
@@ -10,8 +10,7 @@ import {
   type Perspektive,
   type Quelle,
 } from "../api";
-import { Hinweis, Karte, Quellenliste } from "./Bausteine";
-import { Symbol } from "./Symbole";
+import { Hinweis, Quellen } from "./Bausteine";
 
 export function ChatTab({
   token,
@@ -24,7 +23,6 @@ export function ChatTab({
   versicherteName,
   verhaeltnis,
   entwurfGesetzt,
-  zuUnterlagen,
 }: {
   token: string;
   hatUnterlagen: boolean;
@@ -36,7 +34,6 @@ export function ChatTab({
   versicherteName: string;
   verhaeltnis: string;
   entwurfGesetzt: (text: string) => void;
-  zuUnterlagen: () => void;
 }) {
   const [aktionen, setAktionen] = useState<Aktion[]>([]);
   const [eingabe, setEingabe] = useState("");
@@ -48,9 +45,7 @@ export function ChatTab({
   const verlaufFeld = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    aktionenLaden()
-      .then(setAktionen)
-      .catch(() => setAktionen([]));
+    aktionenLaden().then(setAktionen).catch(() => setAktionen([]));
   }, []);
 
   // Immer die neueste Nachricht zeigen.
@@ -58,7 +53,7 @@ export function ChatTab({
     if (verlaufFeld.current) {
       verlaufFeld.current.scrollTop = verlaufFeld.current.scrollHeight;
     }
-  }, [verlauf, teilantwort, status]);
+  }, [verlauf, teilantwort]);
 
   async function fragen(aktion?: Aktion, freieFrage?: string) {
     const anzeige = aktion ? aktion.nutzertext : (freieFrage ?? "").trim();
@@ -139,175 +134,107 @@ export function ChatTab({
   }
 
   return (
-    <div className="spalten zwei-schmal">
-      <div className="stapel">
-        {!hatUnterlagen && (
-          <Hinweis art="warnung">
-            <strong>Der Assistent braucht zuerst Ihre Unterlagen.</strong> Ohne Bescheid und
-            Gutachten kann er nichts prüfen.{" "}
-            <button
-              className="knopf klein"
-              style={{ marginLeft: "var(--a2)" }}
-              onClick={zuUnterlagen}
-            >
-              Unterlagen hochladen
-            </button>
-          </Hinweis>
+    <section aria-labelledby="chat-titel">
+      <h2 id="chat-titel">Schritt 2 – Mit dem Assistenten prüfen</h2>
+
+      {!hatUnterlagen && (
+        <Hinweis art="warnung">
+          <strong>Die Aufgaben sind noch gesperrt.</strong> Der Assistent braucht zuerst Ihre
+          Unterlagen. Wechseln Sie dafür in den Reiter <strong>„Unterlagen“</strong>.
+        </Hinweis>
+      )}
+
+      <p>
+        <strong>Was möchten Sie tun?</strong>
+      </p>
+      <div className="aufgaben">
+        {aktionen.map((aktion) => (
+          <button
+            key={aktion.schluessel}
+            className="knopf"
+            disabled={!hatUnterlagen || laeuft}
+            title={hatUnterlagen ? aktion.beschreibung : "Zuerst Unterlagen hochladen."}
+            onClick={() => fragen(aktion)}
+          >
+            {aktion.titel}
+          </button>
+        ))}
+      </div>
+
+      <div className="verlauf" ref={verlaufFeld} aria-live="polite" aria-label="Gesprächsverlauf">
+        {verlauf.length === 0 && !teilantwort && (
+          <p>
+            <strong>Hier erscheint Ihr Gespräch.</strong> Wählen Sie oben eine Aufgabe oder
+            stellen Sie unten Ihre eigene Frage.
+          </p>
         )}
-
-        <Karte titel="Was möchten Sie tun?" symbol="assistent">
-          <div className="aufgaben">
-            {aktionen.map((aktion) => (
-              <button
-                key={aktion.schluessel}
-                className="aufgabe"
-                disabled={!hatUnterlagen || laeuft}
-                onClick={() => fragen(aktion)}
-              >
-                <span className="aufgabe-titel">{aktion.titel}</span>
-                <span className="aufgabe-text">{aktion.beschreibung}</span>
-              </button>
-            ))}
+        {verlauf.map((nachricht, index) => (
+          <div key={index} className={`blase ${nachricht.role === "user" ? "nutzer" : ""}`}>
+            <div className="blase-kopf">
+              {nachricht.role === "user" ? "🧑 Ihre Frage" : "⚖️ Assistent"}
+            </div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{nachricht.content}</div>
           </div>
-        </Karte>
-
-        <Karte titel="Gespräch" symbol="assistent" flach
-          werkzeuge={
-            verlauf.length > 0 && (
-              <button
-                className="knopf stumm klein"
-                onClick={() => {
-                  setVerlauf([]);
-                  setQuellen([]);
-                }}
-              >
-                <Symbol name="papierkorb" groesse={16} />
-                Verlauf löschen
-              </button>
-            )
-          }
-        >
-          <div className="verlauf" ref={verlaufFeld} aria-live="polite" aria-label="Gesprächsverlauf">
-            {verlauf.length === 0 && !teilantwort && !laeuft && (
-              <div className="leerer-verlauf">
-                <Symbol name="assistent" groesse={40} />
-                <div style={{ fontWeight: 620, color: "var(--text)" }}>
-                  Hier erscheint Ihr Gespräch
-                </div>
-                <p style={{ fontSize: "0.9rem", marginTop: "var(--a2)" }}>
-                  Wählen Sie oben eine der vorbereiteten Aufgaben – oder stellen Sie unten Ihre
-                  eigene Frage in ganz normalen Worten.
-                </p>
-              </div>
-            )}
-
-            {verlauf.map((nachricht, index) => (
-              <div
-                key={index}
-                className={`blase ${nachricht.role === "user" ? "nutzer" : "assistent"}`}
-              >
-                <div className="blase-kopf">
-                  {nachricht.role === "user" ? "Ihre Frage" : "Assistent"}
-                </div>
-                <div className="blase-koerper">{nachricht.content}</div>
-              </div>
-            ))}
-
-            {teilantwort && (
-              <div className="blase assistent">
-                <div className="blase-kopf">Assistent</div>
-                <div className="blase-koerper">{teilantwort}</div>
-              </div>
-            )}
-
-            {laeuft && !teilantwort && (
-              <div className="blase assistent">
-                <div className="blase-kopf">Assistent</div>
-                <div className="blase-koerper" style={{ display: "flex", alignItems: "center", gap: "var(--a3)" }}>
-                  <span className="tippen" aria-hidden="true">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                  <span style={{ color: "var(--gedaempft)", fontSize: "0.9rem" }}>
-                    {status || "Einen Moment …"}
-                  </span>
-                </div>
-              </div>
-            )}
+        ))}
+        {teilantwort && (
+          <div className="blase">
+            <div className="blase-kopf">⚖️ Assistent</div>
+            <div style={{ whiteSpace: "pre-wrap" }}>{teilantwort}</div>
           </div>
+        )}
+      </div>
 
-          <form
-            className="eingabezeile"
-            onSubmit={(e) => {
+      {suchfrage && (
+        <p role="status">
+          🔎 Gesucht wurde nach: <em>„{suchfrage}“</em>
+        </p>
+      )}
+      {laeuft && status && <p role="status">⏳ {status}</p>}
+      {fehler && <Hinweis art="fehler">{fehler}</Hinweis>}
+
+      <form
+        className="eingabezeile"
+        onSubmit={(e) => {
+          e.preventDefault();
+          fragen(undefined, eingabe);
+        }}
+      >
+        <label htmlFor="chateingabe" className="nur-vorlesen">
+          Ihre Frage
+        </label>
+        <textarea
+          id="chateingabe"
+          rows={2}
+          value={eingabe}
+          disabled={!hatUnterlagen || laeuft}
+          placeholder={hatUnterlagen ? "Ihre Frage eingeben …" : "Zuerst Unterlagen hochladen"}
+          onChange={(e) => setEingabe(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               fragen(undefined, eingabe);
-            }}
-          >
-            <label htmlFor="chateingabe" className="nur-vorlesen">
-              Ihre Frage
-            </label>
-            <textarea
-              id="chateingabe"
-              rows={1}
-              value={eingabe}
-              disabled={!hatUnterlagen || laeuft}
-              placeholder={hatUnterlagen ? "Stellen Sie eine Frage …" : "Zuerst Unterlagen hochladen"}
-              onChange={(e) => setEingabe(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  fragen(undefined, eingabe);
-                }
-              }}
-            />
-            <button
-              className="knopf haupt"
-              type="submit"
-              disabled={!eingabe.trim() || laeuft}
-              aria-label="Frage senden"
-            >
-              <Symbol name="senden" groesse={19} />
-            </button>
-          </form>
-        </Karte>
+            }
+          }}
+        />
+        <button className="knopf haupt" type="submit" disabled={!eingabe.trim() || laeuft}>
+          Senden
+        </button>
+      </form>
 
-        {suchfrage && (
-          <p className="hilfe" role="status">
-            <Symbol name="suche" groesse={15} /> Gesucht wurde nach: <em>„{suchfrage}“</em>
-          </p>
-        )}
-        {fehler && <Hinweis art="fehler">{fehler}</Hinweis>}
-      </div>
+      <Quellen quellen={quellen} />
 
-      <div className="stapel">
-        <Karte
-          titel={`Belege der letzten Antwort (${quellen.length})`}
-          symbol="quellen"
-          fuss="Die hochgestellten Ziffern in der Antwort verweisen auf diese Abschnitte."
+      {verlauf.length > 0 && (
+        <button
+          className="knopf"
+          style={{ marginTop: "1rem" }}
+          onClick={() => {
+            setVerlauf([]);
+            setQuellen([]);
+          }}
         >
-          {quellen.length > 0 ? (
-            <Quellenliste quellen={quellen} />
-          ) : (
-            <p className="hilfe">
-              Sobald der Assistent geantwortet hat, steht hier zu jeder Ziffer die Textstelle, auf
-              die sie sich stützt.
-            </p>
-          )}
-        </Karte>
-
-        <Karte titel="So lesen Sie die Antwort" symbol="info">
-          <p style={{ fontSize: "0.9rem", color: "var(--gedaempft)" }}>
-            Der Assistent belegt jede Aussage mit einer hochgestellten Ziffer. Eine Antwort{" "}
-            <strong>ohne</strong> solche Ziffern bekommt eine Warnung vorangestellt – dann stützt
-            sie sich auf nichts Nachprüfbares und kann sachlich falsch sein.
-          </p>
-          <p style={{ fontSize: "0.9rem", color: "var(--gedaempft)" }}>
-            Besonders bei Punktzahlen, Fristen und Zuständigkeiten lohnt der Blick in die
-            Belegstelle. Die Texte sind Entwürfe, keine Rechtsberatung.
-          </p>
-        </Karte>
-      </div>
-    </div>
+          🗑️ Gespräch löschen
+        </button>
+      )}
+    </section>
   );
 }
