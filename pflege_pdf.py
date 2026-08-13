@@ -14,7 +14,7 @@ der Verbraucherzentrale, gesetzt im Format eines Geschäftsbriefs nach DIN 5008
 Damit sieht das Schreiben aus wie ein Brief, den eine Behörde erwartet - und
 nicht wie ein maschinell zusammengesetztes Dokument.
 
-Das Modul ist frei von Streamlit-Abhängigkeiten und einzeln testbar.
+Das Modul kennt weder Dienst noch Oberfläche und ist einzeln testbar.
 """
 
 from __future__ import annotations

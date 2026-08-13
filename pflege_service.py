@@ -1,11 +1,12 @@
 """Dienstschicht für Suche, Antworten und Dokumentenverarbeitung.
 
-Bündelt alles, was bisher im Streamlit-Prozess lag, an einer Stelle. Dadurch
+Bündelt alles, was früher im Prozess der Oberfläche lag, an einer Stelle. Dadurch
 
 * hält nur noch ein Prozess die Vektordatenbank (die Ein-Prozess-Sperre stört
   im Betrieb nicht mehr),
 * lassen sich Suche und Antworterzeugung ohne Oberfläche testen,
-* kann jede Oberfläche darauf aufsetzen - Streamlit ebenso wie ein React-Frontend.
+* spricht die Oberfläche den Dienst ausschließlich über HTTP an und kann
+  ausgetauscht werden, ohne die Fachlogik anzufassen.
 
 Die schweren Bestandteile (Wissensdatenbank, Neubewertungsmodell,
 PDF-Umwandler) werden einmalig geladen und wiederverwendet.
