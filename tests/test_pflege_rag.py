@@ -372,3 +372,64 @@ class TestKontextbudget:
 
     def test_vertraegt_leere_liste(self):
         assert rag._passe_in_kontext([], 1000) == ([], 1000)
+
+
+class TestAntwortstromOhneKopfzeilen:
+    """Kontext-Kopfzeilen dürfen den Chat nicht erreichen.
+
+    Mistral Nemo kopiert die Trennzeilen des Kontexts gelegentlich in seine
+    Antwort - belegt am 2026-08-13 mit "----- [1] ----- Herkunft: https://...".
+    Beim Brief fiel das nie auf, weil prepare_begruendung nachträglich putzt;
+    im Gespräch stand es sichtbar da. Prompt-Verbote helfen bei diesem Modell
+    nicht, deshalb wird der Strom gefiltert.
+    """
+
+    def strom(self, stuecke):
+        """Führt den Filter aus pflege_service über eine Folge von Textstücken."""
+        import pflege_service as dienst
+
+        gesammelt, gesendet, ausgabe = "", 0, []
+        for stueck in stuecke:
+            gesammelt += stueck
+            sauber = rag.strip_context_headers(
+                gesammelt[: dienst._zeilenschnitt(gesammelt, dienst.ZURUECKGEHALTENE_ZEILEN)]
+            )
+            if len(sauber) > gesendet:
+                ausgabe.append(sauber[gesendet:])
+                gesendet = len(sauber)
+        gesammelt = rag.strip_context_headers(gesammelt)
+        if len(gesammelt) > gesendet:
+            ausgabe.append(gesammelt[gesendet:])
+        return "".join(ausgabe)
+
+    def test_einzeilige_kopfzeile_erreicht_die_anzeige_nie(self):
+        stuecke = ["----- [1] ----- ", "Herkunft: https://www.pflege.de/x\n",
+                   "Die Begutachtung ", "erfolgt in sechs Modulen."]
+        assert self.strom(stuecke) == "Die Begutachtung erfolgt in sechs Modulen."
+
+    def test_kopfzeile_ueber_zwei_zeilen(self):
+        stuecke = ["----- [2] -----\n", "Herkunft: daten/Richtlinien.pdf\n",
+                   "Modul 4 umfasst die Selbstversorgung."]
+        assert self.strom(stuecke) == "Modul 4 umfasst die Selbstversorgung."
+
+    def test_sauberer_text_kommt_vollstaendig_an(self):
+        stuecke = ["Modul 1 ", "bewertet die ", "Mobilität.\n", "Modul 2 die ", "Fähigkeiten."]
+        assert self.strom(stuecke) == "Modul 1 bewertet die Mobilität.\nModul 2 die Fähigkeiten."
+
+    def test_antwort_ohne_zeilenumbruch_geht_nicht_verloren(self):
+        # Kurze Antworten enthalten oft gar keinen Umbruch. Ohne die
+        # Schlussausgabe käme dann nichts an.
+        assert self.strom(["Ja, ", "das ist ", "möglich."]) == "Ja, das ist möglich."
+
+
+class TestZeilenschnitt:
+    def test_haelt_die_letzten_zeilen_zurueck(self):
+        import pflege_service as dienst
+
+        text = "eins\nzwei\ndrei\nvier"
+        assert text[: dienst._zeilenschnitt(text, 2)] == "eins\nzwei\n"
+
+    def test_sendet_nichts_solange_zu_wenige_zeilen_da_sind(self):
+        import pflege_service as dienst
+
+        assert dienst._zeilenschnitt("nur eine Zeile", 2) == 0

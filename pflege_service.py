@@ -230,6 +230,26 @@ OHNE_BELEG_HINWEIS = (
     "Unterlagen hoch.\n\n"
 )
 
+# Eine übernommene Kopfzeile kann sich über zwei Zeilen erstrecken
+# ("----- [1] -----" und darunter "Herkunft: ..."). So viele Zeilen hält der
+# Strom deshalb zurück, bevor er Text weitergibt.
+ZURUECKGEHALTENE_ZEILEN = 2
+
+
+def _zeilenschnitt(text: str, zurueckhalten: int) -> int:
+    """Gibt die Stelle zurück, bis zu der gefahrlos gesendet werden darf.
+
+    Das ist das Ende der letzten Zeile, die noch ``zurueckhalten`` vollständige
+    Zeilen hinter sich hat. Gibt es so viele Zeilen noch nicht, wird nichts
+    gesendet.
+    """
+    schnitt = len(text)
+    for _ in range(zurueckhalten):
+        schnitt = text.rfind("\n", 0, schnitt)
+        if schnitt == -1:
+            return 0
+    return schnitt + 1
+
 
 def beantworte(
     token: str,
@@ -268,9 +288,22 @@ def beantworte(
     )
 
     gesammelt = ""
+    gesendet = 0
     for teil in pflege_rag.stream_answer(ressourcen.llm(), nachrichten):
         gesammelt += teil
-        yield {"art": "text", "text": teil}
+        # Die letzten Zeilen werden zurückgehalten: eine Kopfzeile lässt sich
+        # erst erkennen, wenn sie vollständig da ist. Ohne das blitzt sie im
+        # Gesprächsfenster auf, bevor sie wieder verschwindet.
+        sauber = pflege_rag.strip_context_headers(
+            gesammelt[: _zeilenschnitt(gesammelt, ZURUECKGEHALTENE_ZEILEN)]
+        )
+        if len(sauber) > gesendet:
+            yield {"art": "text", "text": sauber[gesendet:]}
+            gesendet = len(sauber)
+
+    gesammelt = pflege_rag.strip_context_headers(gesammelt)
+    if len(gesammelt) > gesendet:
+        yield {"art": "text", "text": gesammelt[gesendet:]}
 
     verwendet = set(pflege_rag.cited_numbers(gesammelt)) & set(ergebnis.nummern)
     angezeigt = pflege_rag.render_citations(gesammelt, ergebnis.nummern)
