@@ -30,12 +30,14 @@ ingest_log.txt
 #
 # Unterlagen einzelner Personen gehören dort NICHT hinein. Für solche Dateien
 # ist daten/privat/ vorgesehen - dieser Ordner wird nie mitversioniert.
-#
-# Der erfundene Beispielfall steht bewusst außerhalb von daten/ (im Ordner
-# beispielfall/): Er gehört zum Ausprobieren hochgeladen, nicht in die
-# Wissensbasis. Lägen die Dateien in daten/, würde ein späterer Wechsel von
-# os.listdir() auf eine rekursive Suche sie stillschweigend mit einlesen.
 daten/privat/
+
+# Reale Pflegedokumente bleiben örtlich. Sie gehören nicht ins Repository:
+# GitHub weist Dateien über 100 MB ohnehin ab, und selbst anonymisierte
+# Gutachten sollen nicht veröffentlicht werden. Wer die Wissensbasis nachbaut,
+# braucht sie nicht - die amtlichen Quellen genügen dafür.
+daten/MD_Sachsen-Anhalt_Gesundheitsdaten_REAL.pdf
+daten/Pflegedokumente_Real_Gutachten.pdf
 
 # Lokal erzeugte ONNX-Modelle fuer den Betrieb auf der Grafikkarte (mehrere GB)
 modelle/

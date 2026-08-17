@@ -144,34 +144,32 @@ docker compose down
 
 ```
 app.py            Weboberfläche (Streamlit): vier Reiter, Bedienführung, Fortschrittsanzeige
-backend.py        Dienst (FastAPI): Zugangscodes, verschlüsselte Ablage, Schnittstellen
-pflege_service.py Fachlogik zwischen Dienst und Suche: Dokumentenaufbereitung, Antwortstrom
+backend.py        Dienst (FastAPI): Zugangscodes, verschlüsselte Ablage
 pflege_rag.py     Suche und Antworterzeugung: hybride Suche, Neubewertung, Belegstellen
 pflege_pdf.py     Erzeugung des Widerspruchsschreibens als Geschäftsbrief nach DIN 5008
 ingest.py         Aufbau der Wissensdatenbank aus daten/, SGB XI und geprüften Webseiten
 main.py           Diagnose auf der Kommandozeile: zeigt Treffer, Bewertungen und Belege
 check_db.py       Übersicht über den Inhalt der Wissensdatenbank
-tests/            Testreihe (pytest): Suche, Textaufbereitung, Briefaufbau
+pruefe_antworten.py  Prüfbatterie: freie Fragen und die erwarteten Angaben
 docker-compose.yml  Vektordatenbank als örtlicher Dienst
 daten/            Fachdokumente für die Wissensdatenbank (amtliche Quellen)
 daten/privat/     Unterlagen einzelner Personen – wird nie versioniert
-beispielfall/     erfundener Fall zum Ausprobieren (Bescheid, Gutachten, Tagebuch …)
 ```
 
-### Zum Ausprobieren
+### Antwortqualität prüfen
 
-Der Ordner `beispielfall/` enthält einen vollständig erfundenen Fall: Bescheid einer
-Muster-Pflegekasse, Gutachten des Medizinischen Dienstes, Pflegetagebuch, ärztlicher
-Befundbericht und ein Auszug aus der Patientenakte. Die fünf Dateien lassen sich im Reiter
-*Unterlagen* hochladen, danach sind alle Aufgaben des Assistenten benutzbar – ohne dass echte
-Gesundheitsdaten nötig sind. Die Dateien gehören **nicht** in `daten/`: Dort steht das
-Fachwissen, das der Assistent zitiert.
-
-Die Testreihe läuft ohne LM Studio und ohne Docker:
+`pruefe_antworten.py` stellt dem Assistenten 28 freie Fragen – nicht die vorbereiteten
+Aufgaben – aus den Bereichen Begutachtung, Widerspruchsverfahren, Antrag, Leistungen und
+Rechtsgrundlagen. Zu jeder Frage ist festgelegt, welche Angaben eine brauchbare Antwort
+enthalten muss. Sechs weitere Fragen liegen bewusst außerhalb des Themas und müssen
+abgewiesen werden.
 
 ```bash
-python -m pytest tests/ -q
+python pruefe_antworten.py            # alle Fragen
+python pruefe_antworten.py widerspruch   # nur eine Gruppe
 ```
+
+LM Studio und die Vektordatenbank müssen dafür laufen.
 
 ### Wie eine Antwort entsteht
 

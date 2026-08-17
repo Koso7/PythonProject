@@ -47,6 +47,11 @@ BATCH_SIZE = 32
 # Sie würden sonst als allgemeines "Fachwissen" in den Antworten anderer
 # Ratsuchender auftauchen und deren Fall mit fremden Angaben vermischen.
 # Solche Dateien eignen sich weiterhin zum Testen des Uploads in der Oberfläche.
+# Geprüft am 2026-08-13 durch Texterkennung auf Stichproben:
+# MD_Sachsen-Anhalt_Gesundheitsdaten_REAL.pdf ist NICHT anonymisiert. Auf
+# Seite 11 stehen im Klartext zwei vollständige Namen, zwei Geburtsdaten und
+# eine Wohnadresse, dazu Pflegegrad und Pflegeaufwand. Diese Datei darf die
+# Wissensbasis unter keinen Umständen erreichen.
 EXCLUDED_FILES = {
     "Gutachten3.pdf",
     "MD_Sachsen-Anhalt_Gesundheitsdaten_REAL.pdf",

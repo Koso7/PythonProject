@@ -23,7 +23,6 @@ sys.stdout = io.TextIOWrapper(
 )
 
 import pflege_rag
-import pflege_service
 
 
 @dataclass
@@ -120,6 +119,26 @@ class Ergebnis:
         return not self.fehler
 
 
+# Die schweren Bestandteile einmal laden und wiederverwenden. Beim ersten
+# Aufruf dauert das Laden des Neubewertungsmodells rund 20 Sekunden.
+_geladen: dict = {}
+
+
+def _llm():
+    if "llm" not in _geladen:
+        _geladen["llm"] = pflege_rag.create_llm()
+    return _geladen["llm"]
+
+
+def _fachwissen() -> pflege_rag.HybridIndex:
+    """Öffnet die Wissensdatenbank und baut den Stichwortindex dazu auf."""
+    if "fach" not in _geladen:
+        speicher = pflege_rag.open_expert_database(pflege_rag.create_embeddings())
+        abschnitte = pflege_rag.load_all_expert_chunks(speicher)
+        _geladen["fach"] = pflege_rag.HybridIndex(speicher, abschnitte)
+    return _geladen["fach"]
+
+
 def pruefe(pruefung: Pruefung, reranker, fach) -> Ergebnis:
     start = time.time()
     ergebnis = pflege_rag.prepare_context(fach, None, pruefung.frage, reranker=reranker)
@@ -130,7 +149,7 @@ def pruefe(pruefung: Pruefung, reranker, fach) -> Ergebnis:
         nachrichten = pflege_rag.build_messages(
             ergebnis.system_prompt, [{"role": "user", "content": pruefung.frage}]
         )
-        antwort = "".join(pflege_rag.stream_answer(pflege_service.ressourcen.llm(), nachrichten))
+        antwort = "".join(pflege_rag.stream_answer(_llm(), nachrichten))
         antwort = pflege_rag.render_citations(
             pflege_rag.strip_context_headers(antwort), ergebnis.nummern
         )
@@ -164,8 +183,8 @@ def main() -> int:
         return 2
 
     print(f"{len(aufgaben)} Fragen werden geprüft. Das dauert einige Minuten.\n")
-    reranker = pflege_service.ressourcen.reranker()
-    fach = pflege_service.ressourcen.expert_index()
+    reranker = pflege_rag.create_reranker()
+    fach = _fachwissen()
 
     ergebnisse = []
     letzte_gruppe = ""
