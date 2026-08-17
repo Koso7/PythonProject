@@ -164,7 +164,13 @@ _LEFTOVER_SEPARATOR_RE = re.compile(r"^\s*-{3,}\s*\[?\d{1,2}\]?\s*-{3,}\s*$", re
 # Gliederungsmarken, die das Sprachmodell aus der Aufgabenbeschreibung
 # übernimmt ("[Einleitung]", "[Hauptteil]"). Sie stehen allein auf einer Zeile
 # und gehören nicht in einen Brief.
-_ABSCHNITTSMARKE_RE = re.compile(r"^\s*\[[^\]\n]{2,40}\]\s*:?\s*$", re.MULTILINE)
+#
+# Die Obergrenze lag bis 2026-08-17 bei 40 Zeichen. Dadurch blieb
+# "[Modul Bewältigung von krankheits- und therapiebedingten Anforderungen]"
+# mit 69 Zeichen stehen und landete im Brief. Entscheidend ist nicht die Länge,
+# sondern dass die Klammer allein auf der Zeile steht - in einem Widerspruch
+# gibt es dafür keinen zulässigen Fall.
+_ABSCHNITTSMARKE_RE = re.compile(r"^\s*\[[^\]\n]{2,160}\]\s*:?\s*$", re.MULTILINE)
 
 
 def strip_context_headers(text: str) -> str:
@@ -228,6 +234,42 @@ def strip_meinungsfloskeln(text: str) -> str:
     # Doppelte Leerzeichen und Leerzeichen vor Satzzeichen aufräumen.
     text = re.sub(r"[ \t]{2,}", " ", text)
     return re.sub(r"\s+([,.;:!?])", r"\1", text)
+
+
+# Zahlen, die im Umfeld von "Punkt" stehen. Der Auftrag an das Sprachmodell
+# verlangt, nur Punktzahlen zu nennen, die wörtlich in den Unterlagen stehen -
+# und genau das lässt sich nachprüfen, statt darauf zu vertrauen.
+_PUNKTZAHL_RE = re.compile(
+    r"(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:Punkte?|Einzelpunkte?)\b", re.IGNORECASE
+)
+
+
+def finde_unbelegte_punktzahlen(text: str, unterlagen: str) -> list[str]:
+    """Meldet Punktzahlen, die in den Unterlagen nicht vorkommen.
+
+    Das Sprachmodell rechnet gern selbst und schreibt Ergebnisse wie „die
+    Gewichtung ergäbe demnach 60 Punkte“ - für ein einzelnes Modul unmöglich.
+    Solche Zahlen wirken in einem Behördenschreiben wie eine Tatsachenbehauptung
+    und beschädigen den Widerspruch. Automatisch berichtigen lässt sich das
+    nicht, wohl aber melden.
+
+    Verglichen wird nachsichtig: Komma und Punkt gelten als gleich, damit „2,5“
+    und „2.5“ nicht als zwei verschiedene Zahlen erscheinen.
+    """
+    def formen(zahl: str) -> set[str]:
+        grund = zahl.replace(",", ".")
+        moeglich = {grund, grund.replace(".", ",")}
+        if grund.endswith(".0"):          # "2.0" steht in Unterlagen oft als "2"
+            moeglich.add(grund[:-2])
+        return moeglich
+
+    quelle = unterlagen or ""
+    unbelegt: list[str] = []
+    for treffer in _PUNKTZAHL_RE.finditer(text or ""):
+        zahl = treffer.group(1)
+        if not any(f in quelle for f in formen(zahl)) and zahl not in unbelegt:
+            unbelegt.append(zahl)
+    return unbelegt
 
 
 def find_personal_wording(text: str) -> list[str]:

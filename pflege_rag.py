@@ -71,24 +71,42 @@ FINAL_EXPERT_CHUNKS = 5
 FINAL_USER_CHUNKS = 5
 # Bei Aufgaben über alle sechs Module braucht das Sprachmodell mehr Belege,
 # sonst bleibt zu einzelnen Modulen nichts übrig und es erfindet Inhalte.
-FINAL_USER_CHUNKS_BREIT = 10
-FINAL_EXPERT_CHUNKS_BREIT = 6
+#
+# Am 2026-08-17 angehoben, nachdem das Kontextfenster von 8192 auf 35000 Token
+# vergrößert wurde. Vorher waren es 10 und 6 - bei sechs Modulen also etwa EIN
+# Fachabschnitt je Modul, zu wenig, um eine Bewertung zu begründen.
+FINAL_USER_CHUNKS_BREIT = 20
+FINAL_EXPERT_CHUNKS_BREIT = 18
 
 # Obergrenze für die Neubewertung. Bei Aufgaben mit Zusatzfragen (etwa der
 # Differenzanalyse mit sechs Modulen) entstehen sonst mehrere hundert
 # Kandidaten, deren Bewertung auf der CPU spürbar Zeit kostet. Die Rangfusion
 # hat die aussichtsreichsten Treffer da bereits nach oben sortiert.
-MAX_RERANK_CANDIDATES = 40
+#
+# Auf der Grafikkarte kostet die Neubewertung 4 Sekunden für 180 Paare, also
+# lässt sich die Auswahl verdoppeln, ohne dass es spürbar länger dauert. Mehr
+# Kandidaten heißt: Der Cross-Encoder hat mehr, worunter er wählen kann.
+MAX_RERANK_CANDIDATES = 80
 
 # Obergrenze für die Textmenge, die als Beleg mitgeschickt wird.
 #
-# Das örtliche Sprachmodell arbeitet mit 8192 Token Kontext. Darin müssen
-# Systemprompt, Belege, Gesprächsverlauf UND die Antwort Platz finden. Wird es
-# zu eng, bricht die Antwort nicht sauber ab, sondern zerfällt in
-# zusammenhanglose Bruchstücke ("MD3.75 members 6.25 MD15.0"). Rund vier
-# Zeichen entsprechen einem Token; 9000 Zeichen lassen genug Raum für eine
-# ausführliche Antwort.
-MAX_CONTEXT_CHARS = 9000
+# Darin müssen Grundanweisung, Belege, Gesprächsverlauf UND die Antwort Platz
+# finden. Wird es zu eng, bricht die Antwort nicht sauber ab, sondern zerfällt
+# in zusammenhanglose Bruchstücke ("MD3.75 members 6.25 MD15.0").
+#
+# Mistral Nemo kann 1.024.000 Token; entscheidend ist aber, mit welcher
+# Kontextlänge LM Studio das Modell geladen hat. Bis 2026-08-17 waren das 8192,
+# und davon blieben nach Anweisung, Verlauf und Antwortplatz nur rund 2700 Token
+# für Belege übrig - bei sechs Modulen zu wenig, um einen Widerspruch zu
+# begründen. Jetzt sind 35000 geladen.
+#
+# Gerechnet wird mit 3,3 Zeichen je Token (deutsche Fachbegriffe zerfallen in
+# mehrere Token). 30000 Zeichen sind rund 9000 Token und lassen bei 35000
+# geladener Länge Raum für Anweisung (~1900), Verlauf (~5000), Antwort (~2600)
+# und einen Sicherheitsabstand. Bewusst NICHT der gesamte freie Platz: Sehr
+# lange Kontexte kosten Zeit, und ein Modell dieser Größe verliert in der Mitte
+# langer Belegstrecken den Faden.
+MAX_CONTEXT_CHARS = 30000
 
 # Kandidaten unterhalb dieser Bewertung sind für die Frage ohne Aussagekraft.
 # Tabellenrahmen und Seitenzahlen erreichen im Test genau 0,000.
@@ -1017,8 +1035,11 @@ def prepare_context(
     if expert_index is None:
         fach_bewertet: List[Tuple[Document, float]] = []
     elif extra_queries:
+        # Zwei Fachabschnitte je Modul statt einem: Eine Bewertungsstufe zu
+        # begründen braucht die Kriterien UND die Punkteskala, und die stehen in
+        # den Richtlinien selten im selben Abschnitt.
         fach_bewertet = select_per_query(
-            expert_index, reranker, fach_fragen, je_frage=1, min_score=RERANK_MIN_SCORE
+            expert_index, reranker, fach_fragen, je_frage=2, min_score=RERANK_MIN_SCORE
         )[:FINAL_EXPERT_CHUNKS_BREIT]
     else:
         fach_bewertet = rerank(

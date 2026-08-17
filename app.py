@@ -1043,6 +1043,25 @@ def render_pdf_tab() -> None:
             icon="✏️",
         )
 
+    # Das Sprachmodell rechnet gern selbst und schreibt Ergebnisse hin, die in
+    # keinem Dokument stehen ("die Gewichtung ergäbe demnach 60 Punkte" - für
+    # ein Modul unmöglich). In einem Behördenschreiben wirkt das wie eine
+    # Tatsachenbehauptung. Prüfbar ist es, weil der Auftrag ohnehin verlangt,
+    # nur Punktzahlen aus den Unterlagen zu nennen.
+    unterlagen_text = "\n".join(
+        d.page_content for d in st.session_state.get("user_documents", [])
+    )
+    erfunden = pflege_pdf.finde_unbelegte_punktzahlen(get_field("letter_text"), unterlagen_text)
+    if erfunden:
+        st.warning(
+            "**Diese Punktzahlen stehen in keiner Ihrer Unterlagen:** "
+            + ", ".join(f"`{zahl}`" for zahl in erfunden[:8])
+            + ".\n\nDer Assistent hat sie vermutlich selbst gerechnet. Bitte streichen Sie sie "
+            "oder ersetzen Sie sie durch die Werte aus dem Gutachten – eine falsche Punktzahl "
+            "im Widerspruch schwächt Ihre Begründung.",
+            icon="🔢",
+        )
+
     fristwahrend = st.checkbox(
         "Begründung später nachreichen (Widerspruch zunächst nur fristwahrend einlegen)",
         help="Wahrt die Frist. Im Schreiben steht dann, dass die Begründung in Kürze folgt.",
