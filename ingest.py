@@ -383,10 +383,54 @@ def drucke_pruefbericht(berichte: List[IngestReport]) -> None:
             print(f"  - {bericht.name}: {bericht.fehler or 'keine Abschnitte erzeugt'}")
 
 
+def pruefe_dienste() -> List[str]:
+    """Prüft vorab, ob Sprachmodell und Vektordatenbank erreichbar sind.
+
+    Ohne diese Prüfung fällt der Ausfall erst am Ende auf: Das Einlesen der
+    PDF-Dateien braucht mit Texterkennung eine halbe Stunde, und erst danach
+    werden Einbettungen und Datenbank überhaupt angesprochen. Zwei Läufe sind
+    am 2026-08-13 genau so gescheitert - einmal an LM Studio, einmal an einem
+    nicht gestarteten Docker - und beide Male war die Texterkennung umsonst.
+    """
+    import requests
+
+    fehlt: List[str] = []
+
+    basis = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
+    try:
+        antwort = requests.get(f"{basis}/models", timeout=10)
+        antwort.raise_for_status()
+        namen = {m.get("id", "") for m in antwort.json().get("data", [])}
+        gesucht = os.getenv("EMBEDDING_MODEL", "bge-m3")
+        if not any(gesucht in name for name in namen):
+            fehlt.append(f"LM Studio läuft, aber das Einbettungsmodell „{gesucht}“ ist nicht geladen.")
+    except Exception:
+        fehlt.append(f"LM Studio ist nicht erreichbar ({basis}). Server im Reiter „Developer“ starten.")
+
+    if pflege_rag.QDRANT_URL:
+        try:
+            requests.get(f"{pflege_rag.QDRANT_URL.rstrip('/')}/healthz", timeout=10).raise_for_status()
+        except Exception:
+            fehlt.append(
+                f"Die Vektordatenbank ist nicht erreichbar ({pflege_rag.QDRANT_URL}). "
+                "Läuft Docker Desktop? Dann „docker compose up -d“."
+            )
+    return fehlt
+
+
 def build_expert_database() -> int:
     print("=" * 96)
     print("AUFBAU DER WISSENSDATENBANK")
     print("=" * 96)
+
+    print("\n--- Dienste prüfen ---")
+    fehlt = pruefe_dienste()
+    if fehlt:
+        for meldung in fehlt:
+            print(f"   FEHLT: {meldung}")
+        print("\nAbbruch, bevor Arbeit verloren geht. Bitte oben Genanntes starten.")
+        return 1
+    print("   Sprachmodell und Vektordatenbank sind erreichbar.")
 
     print("\n--- PDF-Dokumente ---")
     pdf_docs, pdf_berichte = lade_pdf_dokumente()
