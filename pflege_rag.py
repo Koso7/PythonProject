@@ -101,12 +101,28 @@ MAX_RERANK_CANDIDATES = 80
 # begründen. Jetzt sind 35000 geladen.
 #
 # Gerechnet wird mit 3,3 Zeichen je Token (deutsche Fachbegriffe zerfallen in
-# mehrere Token). 30000 Zeichen sind rund 9000 Token und lassen bei 35000
-# geladener Länge Raum für Anweisung (~1900), Verlauf (~5000), Antwort (~2600)
-# und einen Sicherheitsabstand. Bewusst NICHT der gesamte freie Platz: Sehr
-# lange Kontexte kosten Zeit, und ein Modell dieser Größe verliert in der Mitte
-# langer Belegstrecken den Faden.
-MAX_CONTEXT_CHARS = 30000
+# mehrere Token). 18000 Zeichen sind rund 5450 Token und lassen bei 20000
+# geladener Länge Raum für Anweisung (~1900), Verlauf (~4000), Antwort (~2600)
+# und Sicherheitsabstand.
+#
+# Bewusst NICHT der gesamte freie Platz. Ein Versuch mit 30000 Zeichen bei
+# 35000 geladener Länge brachte zwar mehr Belege, ließ die Antwort aber von
+# 25 auf 249 Sekunden anwachsen - der größere Zwischenspeicher verdrängt
+# Modellschichten aus dem Grafikspeicher. Und mit mehr Zahlen im Kontext
+# rechnet das Modell mehr selbst und erfindet Punktwerte.
+MAX_CONTEXT_CHARS = 18000
+
+# Für gewöhnliche Fragen im Gespräch gilt eine engere Grenze.
+#
+# Gemessen am 2026-08-17 auf diesem Rechner: Das Verarbeiten des Prompts kostet
+# rund 20 Sekunden je 6000 Zeichen (0 Zeichen: 3,6 s, 6000: 22,8 s, 18000:
+# 44,3 s). Kontextgröße ist damit unmittelbar Wartezeit.
+#
+# Bei den vorbereiteten Aufgaben ist das vertretbar - sie laufen einmal und die
+# Person erwartet eine Ausarbeitung. Eine Frage wie "Ab wie vielen Punkten
+# beginnt Pflegegrad 2?" darf dagegen keine 70 Sekunden brauchen; sie ist mit
+# wenigen Abschnitten beantwortet.
+MAX_CONTEXT_CHARS_FRAGE = 7000
 
 # Kandidaten unterhalb dieser Bewertung sind für die Frage ohne Aussagekraft.
 # Tabellenrahmen und Seitenzahlen erreichen im Test genau 0,000.
@@ -750,6 +766,72 @@ _CONTEXT_HEADER_RE = re.compile(
 _LEFTOVER_SEPARATOR_RE = re.compile(r"^\s*-{3,}\s*\[?\d{1,2}\]?\s*-{3,}\s*$", re.MULTILINE)
 
 
+def strip_context_headers_live(text: str) -> str:
+    """Wie ``strip_context_headers``, aber für die laufende Anzeige.
+
+    Beim Strömen wächst der Text zeichenweise. Eine Kopfzeile ist erst
+    erkennbar, wenn sie vollständig da ist - bis dahin stünde sie sichtbar im
+    Gespräch. Deshalb wird ein noch unfertiger Bindestrich-Lauf am Ende
+    zurückgehalten. Sobald die Zeile fertig ist, greift der gewöhnliche Filter
+    und die Anzeige berichtigt sich von selbst.
+
+    Belegt am 2026-08-17: Im Chat erschien sichtbar
+    "----- [7] ----- Herkunft: MDK_F", weil die Oberfläche den Rohtext anzeigte.
+    """
+    sauber = strip_context_headers(text)
+    marke = sauber.rfind("---")
+    if marke != -1 and "\n" not in sauber[marke:]:
+        return sauber[:marke].rstrip()
+    return sauber
+
+
+# Punktebereiche der Pflegegrade nach § 15 Abs. 3 SGB XI. Untergrenze
+# einschließlich, Obergrenze ausschließlich.
+PFLEGEGRAD_BEREICHE: dict[int, Tuple[float, float]] = {
+    1: (12.5, 27.0),
+    2: (27.0, 47.5),
+    3: (47.5, 70.0),
+    4: (70.0, 90.0),
+    5: (90.0, 100.0),
+}
+
+_PUNKTE_RE = re.compile(r"(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:Gesamt)?[Pp]unkte?\b")
+_GRAD_RE = re.compile(r"Pflegegrad\s*([1-5])\b")
+
+
+def finde_widerspruechliche_pflegegrade(text: str) -> List[str]:
+    """Findet Sätze, in denen Punktzahl und Pflegegrad nicht zusammenpassen.
+
+    Das Sprachmodell gibt die Schwellenwerte richtig wieder und zieht daraus
+    trotzdem den falschen Schluss - belegt am 2026-08-17: "Pflegegrad 2:
+    benötigt 27 bis 47,5 Gesamtpunkte. Da Ihre Mutter 26,5 Punkte hat, liegt
+    sie im Bereich von Pflegegrad 2." Die Schwellen stehen im Gesetz, also
+    lässt sich das nachrechnen statt darauf zu hoffen.
+
+    Geprüft wird nur satzweise: Stehen Punktzahl und Pflegegrad im selben Satz,
+    ist der Bezug gemeint. Über Satzgrenzen hinweg wäre die Zuordnung geraten.
+    """
+    treffer: List[str] = []
+    for satz in re.split(r"(?<=[.!?])\s+", text or ""):
+        grade = {int(g) for g in _GRAD_RE.findall(satz)}
+        if len(grade) != 1:
+            continue                      # kein oder mehrfacher Bezug
+        grad = grade.pop()
+        untere, obere = PFLEGEGRAD_BEREICHE[grad]
+        for rohzahl in _PUNKTE_RE.findall(satz):
+            zahl = float(rohzahl.replace(",", "."))
+            # Die Schwellen selbst nennt das Modell oft im gleichen Satz
+            # ("Pflegegrad 3: ab 47,5 Punkte") - das ist richtig, nicht falsch.
+            if zahl in (untere, obere):
+                continue
+            if not (untere <= zahl < obere):
+                treffer.append(
+                    f"{rohzahl} Punkte ergeben nicht Pflegegrad {grad} "
+                    f"({untere:.1f} bis unter {obere:.1f})"
+                )
+    return list(dict.fromkeys(treffer))
+
+
 def strip_context_headers(text: str) -> str:
     """Entfernt versehentlich übernommene Trennzeilen des Kontexts."""
     if not text:
@@ -1049,7 +1131,10 @@ def prepare_context(
     # Auf das Kontextfenster des Sprachmodells zuschneiden. Die Belege der
     # ratsuchenden Person haben Vorrang: Ohne sie ist keine Aussage zum
     # konkreten Fall möglich, während Fachwissen nur die Einordnung liefert.
-    user_bewertet, verbleibend = _passe_in_kontext(user_bewertet, MAX_CONTEXT_CHARS)
+    # Breite Aufgaben brauchen den großen Kontext, einzelne Fragen nicht - und
+    # jede Zeichenmenge kostet Wartezeit beim Verarbeiten des Prompts.
+    obergrenze = MAX_CONTEXT_CHARS if extra_queries else MAX_CONTEXT_CHARS_FRAGE
+    user_bewertet, verbleibend = _passe_in_kontext(user_bewertet, obergrenze)
     fach_bewertet, _ = _passe_in_kontext(fach_bewertet, verbleibend)
 
     user_quellen = build_source_refs(user_bewertet, question, "nutzer", start=1)

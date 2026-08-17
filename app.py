@@ -920,7 +920,10 @@ def generate_answer(suchfrage: str, anweisung: str, zusatzfragen=()) -> tuple[st
         gesammelt = ""
         for teil in pflege_rag.stream_answer(get_llm(), nachrichten):
             gesammelt += teil
-            platz.markdown(gesammelt)
+            # Nicht den Rohtext anzeigen: Das Sprachmodell übernimmt gelegentlich
+            # die technischen Trennzeilen des Suchkontexts, und die stünden sonst
+            # sichtbar im Gespräch ("----- [7] ----- Herkunft: MDK_F").
+            platz.markdown(pflege_rag.strip_context_headers_live(gesammelt))
 
         # Belegnummern in Hochziffern wandeln und nur die tatsächlich
         # verwendeten Quellen anzeigen.
@@ -938,6 +941,18 @@ def generate_answer(suchfrage: str, anweisung: str, zusatzfragen=()) -> tuple[st
                 "besonders bei Zuständigkeiten, Fristen und Punktzahlen. Bitte prüfen Sie sie "
                 "unbedingt nach oder laden Sie passendere Unterlagen hoch.\n\n"
             ) + angezeigt
+
+        # Das Modell gibt die Punktebereiche richtig wieder und zieht daraus
+        # trotzdem den falschen Schluss ("26,5 Punkte, also Pflegegrad 2" -
+        # 26,5 liegt unter 27). Die Schwellen stehen in § 15 SGB XI, also wird
+        # nachgerechnet statt darauf zu hoffen.
+        widerspruch = pflege_rag.finde_widerspruechliche_pflegegrade(angezeigt)
+        if widerspruch:
+            angezeigt += (
+                "\n\n> ⚠️ **Achtung, hier stimmt eine Zuordnung nicht:** "
+                + "; ".join(widerspruch[:3])
+                + ". Maßgeblich sind die Punktebereiche des § 15 SGB XI."
+            )
 
         platz.markdown(angezeigt)
         quellen = [q.als_dict() for q in ergebnis.quellen if not verwendet or q.nummer in verwendet]
