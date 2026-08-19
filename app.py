@@ -857,7 +857,9 @@ def render_chat_tab() -> None:
                 st.markdown(anzeige)
             st.session_state.messages.append({"role": "user", "content": anzeige})
             with st.chat_message("assistant", avatar="⚖️"):
-                antwort, quellen = generate_answer(anzeige, anweisung, zusatzfragen)
+                antwort, quellen = generate_answer(
+                    anzeige, anweisung, zusatzfragen, ist_aufgabe=aktion is not None
+                )
         if antwort:
             st.session_state.messages.append({"role": "assistant", "content": antwort})
             st.session_state.last_sources = quellen
@@ -878,7 +880,9 @@ def render_chat_tab() -> None:
             st.rerun()
 
 
-def generate_answer(suchfrage: str, anweisung: str, zusatzfragen=()) -> tuple[str, List[dict]]:
+def generate_answer(
+    suchfrage: str, anweisung: str, zusatzfragen=(), ist_aufgabe: bool = False
+) -> tuple[str, List[dict]]:
     """Sucht Belege, erzeugt die Antwort und versieht sie mit Hochziffern.
 
     ``suchfrage`` ist die kurze Formulierung für die Suche, ``anweisung`` der
@@ -905,10 +909,16 @@ def generate_answer(suchfrage: str, anweisung: str, zusatzfragen=()) -> tuple[st
         # Themenfremde Fragen gar nicht erst an das Sprachmodell geben. Es
         # antwortet sonst mit dem, was zufällig im Kontext steht - bei der
         # Frage nach dem Wetter kam der Inhalt des Pflegegutachtens heraus,
-        # samt Belegziffern. Nur bei freien Fragen prüfen: Die vorbereiteten
-        # Aufgaben sind immer im Thema, suchen aber breit über alle Module und
-        # erreichen deshalb nicht immer eine hohe Einzelbewertung.
-        if not zusatzfragen and ergebnis.themenfremd:
+        # samt Belegziffern.
+        #
+        # Die Prüfung gilt NUR für frei getippte Fragen. Die vorbereiteten
+        # Aufgaben sind gewählt worden, sie sind also immer im Thema - und ihr
+        # Text ist eine Arbeitsanweisung, kein Sachbegriff. "Bitte sichte meine
+        # Unterlagen und gib mir einen Überblick" erreichte 0,015 und wurde
+        # dadurch abgewiesen, obwohl die Person den Knopf gerade gedrückt hatte.
+        # Vorher hing die Ausnahme an den Zusatzfragen; die hat diese Aufgabe
+        # als einzige nicht.
+        if not ist_aufgabe and ergebnis.themenfremd:
             st.markdown(pflege_rag.ABLEHNUNG_THEMENFREMD)
             return pflege_rag.ABLEHNUNG_THEMENFREMD, []
 
