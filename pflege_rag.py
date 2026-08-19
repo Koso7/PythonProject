@@ -1005,6 +1005,42 @@ MODULE_QUERIES = [
     f"Modul {nummer} {name} {_BEWERTUNGSBEGRIFFE}" for nummer, name in MODULE_NAMES.items()
 ]
 
+# Dieselben Module, aber in Alltagssprache - zum Durchsuchen der eigenen
+# Unterlagen.
+#
+# Der Grund ist am 2026-08-19 gemessen worden und war der schwerste Mangel der
+# Anwendung: Bei einer Differenzanalyse kamen als beste Treffer aus den eigenen
+# Unterlagen zu JEDEM Modul ausschließlich Abschnitte aus dem Gutachten. Kein
+# einziger aus Pflegetagebuch, Befundbericht oder Medikationsplan.
+#
+# Der Grund liegt auf der Hand, sobald man es sieht: MODULE_QUERIES sprechen die
+# Sprache des Gutachtens ("Modul 4 Selbstversorgung überwiegend unselbständig
+# Einzelpunkte"), und das Gutachten ist genau nach diesen Begriffen gegliedert -
+# es gewinnt jeden Vergleich gegen sich selbst. Ein Pflegetagebuch schreibt
+# "Geduscht wird täglich" und hat damit keine Chance.
+#
+# Die Folge war, dass der Assistent zu fast jedem Modul "keine Angabe in den
+# Unterlagen" meldete - aus seiner Sicht zutreffend, denn er hatte nur das
+# Gutachten gesehen. Eine Differenzanalyse ohne Gegenbelege ist aber sinnlos.
+#
+# Bewusst OHNE Modulnamen und ohne Fachbegriffe: Jedes Fachwort zieht das
+# Gutachten zurück nach oben.
+MODUL_ALLTAGSBEGRIFFE = {
+    1: "gehen laufen Treppe steigen aufstehen Rollator Rollstuhl gestürzt Sturz "
+       "aus dem Bett umsetzen hinsetzen",
+    2: "vergisst Gedächtnis Orientierung verwirrt kennt sich nicht aus Namen "
+       "Uhrzeit erkennt nicht Merkfähigkeit",
+    3: "nachts wach unruhig Angst Angstzustand umhergegangen aggressiv weint "
+       "ruft schreit Wahn nächtliche",
+    4: "duschen geduscht waschen baden anziehen ankleiden Strümpfe Knöpfe "
+       "Toilette Windel Einlage essen trinken Hilfe beim",
+    5: "Medikamente Tabletten Insulin spritzen Blutzucker messen Verband Wunde "
+       "Salbe Arzt Therapie Kompressionsstrümpfe Dosierer",
+    6: "Tagesablauf Besuch Kontakte allein Beschäftigung Spaziergang "
+       "Wohnung verlassen Begleitung Fernsehen",
+}
+NUTZER_QUERIES = tuple(MODUL_ALLTAGSBEGRIFFE.values())
+
 # Regeln, die bei jeder modulweisen Analyse gebraucht werden: Schwellenwerte
 # der Pflegegrade und die Gewichtung der Module.
 BEWERTUNGS_QUERIES = (
@@ -1017,6 +1053,7 @@ BEWERTUNGS_QUERIES = (
 def select_per_query(
     index: HybridIndex, reranker, queries: Sequence[str], je_frage: int = 2,
     kandidaten_je_frage: int = 8, min_score: float = 0.0,
+    dense_fragen: frozenset = frozenset(),
 ) -> List[Tuple[Document, float]]:
     """Wählt für jede Teilfrage eigene Belege aus.
 
@@ -1034,7 +1071,12 @@ def select_per_query(
     for position, frage in enumerate(queries):
         # Nur die Hauptfrage rechtfertigt eine Vektorsuche; die Modulfragen
         # bestehen aus wörtlich vorkommenden Fachbegriffen.
-        kandidaten = index.search([frage], limit=kandidaten_je_frage, dense=(position == 0))
+        #
+        # Ausnahme sind die Fragen in Alltagssprache: "duschen" findet über die
+        # Stichwortsuche kein "Geduscht wird täglich", weil nicht auf Wortstämme
+        # zurückgeführt wird. Genau dort liegen aber die Gegenbelege.
+        vektorsuche = position == 0 or frage in dense_fragen
+        kandidaten = index.search([frage], limit=kandidaten_je_frage, dense=vektorsuche)
         start = len(paare)
         paare.extend((frage, doc) for doc in kandidaten)
         grenzen.append((frage, start, len(paare)))
@@ -1097,10 +1139,20 @@ def prepare_context(
     if user_index is None:
         user_bewertet: List[Tuple[Document, float]] = []
     elif extra_queries:
-        # Aufgaben über alle sechs Module brauchen zu jedem Modul einen Beleg.
-        user_bewertet = select_per_query(user_index, reranker, fragen, je_frage=2)[
-            :FINAL_USER_CHUNKS_BREIT
-        ]
+        # Aufgaben über alle sechs Module brauchen zu jedem Modul einen Beleg -
+        # und zwar aus BEIDEN Richtungen:
+        #
+        #   fragen         findet, was das Gutachten zum Modul festgestellt hat
+        #   NUTZER_QUERIES findet, was Tagebuch, Arztbericht und Medikationsplan
+        #                  dazu hergeben - in deren eigener Sprache
+        #
+        # Ohne den zweiten Durchgang bestand die Auswahl ausschließlich aus
+        # Abschnitten des Gutachtens, und die Differenzanalyse verglich das
+        # Gutachten mit sich selbst.
+        user_bewertet = select_per_query(
+            user_index, reranker, [*fragen, *NUTZER_QUERIES], je_frage=2,
+            dense_fragen=frozenset(NUTZER_QUERIES),
+        )[:FINAL_USER_CHUNKS_BREIT]
     else:
         # Die eigenen Unterlagen betreffen immer den eigenen Fall. Hier zählt die
         # Reihenfolge, nicht das Aussortieren - deshalb keine Mindestbewertung.
