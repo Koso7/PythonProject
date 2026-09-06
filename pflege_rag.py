@@ -78,6 +78,12 @@ FINAL_USER_CHUNKS = 5
 FINAL_USER_CHUNKS_BREIT = 20
 FINAL_EXPERT_CHUNKS_BREIT = 18
 
+# Wie viele Belege je Teilfrage ausgewählt werden. Als eigene Marke, damit ein
+# Vergleichslauf sie mit dem Kontextfenster mitwachsen lassen kann: Bleibt sie
+# fest, ist der Prompt bei 15.000 und bei 50.000 Token derselbe - man würde
+# ausschließlich die Wartezeit messen, nicht die Wirkung des größeren Fensters.
+BELEGE_JE_TEILFRAGE = 2
+
 # Obergrenze für die Neubewertung. Bei Aufgaben mit Zusatzfragen (etwa der
 # Differenzanalyse mit sechs Modulen) entstehen sonst mehrere hundert
 # Kandidaten, deren Bewertung auf der CPU spürbar Zeit kostet. Die Rangfusion
@@ -1210,8 +1216,8 @@ def prepare_context(
         # Abschnitten des Gutachtens, und die Differenzanalyse verglich das
         # Gutachten mit sich selbst.
         user_bewertet = select_per_query(
-            user_index, reranker, [*fragen, *NUTZER_QUERIES], je_frage=2,
-            dense_fragen=frozenset(NUTZER_QUERIES),
+            user_index, reranker, [*fragen, *NUTZER_QUERIES],
+            je_frage=BELEGE_JE_TEILFRAGE, dense_fragen=frozenset(NUTZER_QUERIES),
         )[:FINAL_USER_CHUNKS_BREIT]
     else:
         # Die eigenen Unterlagen betreffen immer den eigenen Fall. Hier zählt die
@@ -1233,7 +1239,8 @@ def prepare_context(
         # begründen braucht die Kriterien UND die Punkteskala, und die stehen in
         # den Richtlinien selten im selben Abschnitt.
         fach_bewertet = select_per_query(
-            expert_index, reranker, fach_fragen, je_frage=2, min_score=RERANK_MIN_SCORE
+            expert_index, reranker, fach_fragen,
+            je_frage=BELEGE_JE_TEILFRAGE, min_score=RERANK_MIN_SCORE
         )[:FINAL_EXPERT_CHUNKS_BREIT]
     else:
         fach_bewertet = rerank(
