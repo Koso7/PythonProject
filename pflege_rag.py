@@ -407,6 +407,17 @@ def create_llm(temperature: float = 0.2, max_tokens: int = 2600) -> ChatOpenAI:
     )
 
 
+# Worauf die Neubewertung rechnen soll: "auto", "grafikkarte" oder "prozessor".
+#
+# Auf der Grafikkarte ist sie achtmal schneller (4 statt 34 Sekunden für 180
+# Paare), belegt dort aber rund 2,2 GB - und der Grafikspeicher ist auf diesem
+# Rechner der Engpass, nicht die Rechenzeit: Gemessen am 2026-08-19 entfielen
+# von 184 Sekunden einer Differenzanalyse 178 auf das Schreiben der Antwort und
+# nur 4 auf Suche und Neubewertung. Wer dem Sprachmodell mehr Kontext geben
+# will, tauscht hier 30 Sekunden gegen 2,2 GB.
+RERANKER_GERAET = os.getenv("RERANKER_GERAET", "auto").strip().lower()
+
+
 def _dml_verfuegbar() -> bool:
     """Prüft, ob eine DirectX-12-Grafikkarte für Berechnungen bereitsteht."""
     try:
@@ -431,7 +442,7 @@ def create_reranker():
     """
     from sentence_transformers import CrossEncoder
 
-    if _dml_verfuegbar():
+    if _dml_gewuenscht():
         try:
             # Der einmalige Export nach ONNX dauert rund 40 Sekunden. Liegt das
             # Ergebnis bereits lokal vor, ist das Laden in etwa 5 Sekunden erledigt.
@@ -452,9 +463,58 @@ def create_reranker():
     return CrossEncoder(RERANKER_MODEL, max_length=RERANKER_MAX_LENGTH)
 
 
+def _dml_gewuenscht() -> bool:
+    """Ob die Grafikkarte genutzt werden soll - Einstellung schlägt Erkennung."""
+    if RERANKER_GERAET == "prozessor":
+        return False
+    if RERANKER_GERAET == "grafikkarte":
+        return True
+    return _dml_verfuegbar()
+
+
 def reranker_backend() -> str:
     """Gibt zurück, worauf die Neubewertung voraussichtlich läuft."""
-    return "Grafikkarte (DirectML)" if _dml_verfuegbar() else "Prozessor"
+    if not _dml_gewuenscht():
+        grund = " (eingestellt)" if RERANKER_GERAET == "prozessor" else ""
+        return f"Prozessor{grund}"
+    return "Grafikkarte (DirectML)"
+
+
+def gib_reranker_frei(reranker) -> None:
+    """Gibt den Grafikspeicher des Neubewertungsmodells wieder frei.
+
+    Reranker und Sprachmodell arbeiten nacheinander - erst wird gesucht und
+    bewertet, dann geschrieben -, liegen aber gleichzeitig im Grafikspeicher.
+    Auf einer 16-GB-Karte entscheidet das darüber, ob das Sprachmodell mit
+    großem Kontextfenster noch vollständig daraufpasst: Bei 20.000 Token fiel
+    die Erzeugung auf 3,8 Token/s, bei 12.500 waren es 92,8.
+
+    Freigegeben wird die ONNX-Sitzung, die den Speicher tatsächlich hält. Das
+    erneute Laden aus dem örtlichen Ordner dauert rund 5 Sekunden - gemessen an
+    einer Antwortzeit von mehreren Minuten fällt das nicht ins Gewicht.
+    """
+    if reranker is None:
+        return
+    import gc
+
+    try:
+        # sentence-transformers hält die Sitzung je nach Fassung an
+        # unterschiedlichen Stellen; alle bekannten werden gelöst.
+        for besitzer, name in ((reranker, "model"), (getattr(reranker, "model", None), "model")):
+            if besitzer is None:
+                continue
+            inneres = getattr(besitzer, name, None)
+            for feld in ("session", "sess", "_session"):
+                if hasattr(inneres, feld):
+                    setattr(inneres, feld, None)
+        if hasattr(reranker, "model"):
+            reranker.model = None
+        if hasattr(reranker, "tokenizer"):
+            reranker.tokenizer = None
+    except Exception as fehler:  # pragma: no cover - reine Vorsorge
+        print(f"Hinweis: Neubewertungsmodell nicht sauber freigegeben ({fehler}).")
+    finally:
+        gc.collect()
 
 
 def create_qdrant_client() -> QdrantClient:

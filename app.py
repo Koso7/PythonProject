@@ -43,6 +43,12 @@ MAX_FILE_SIZE_MB = 30
 MAX_DOCUMENTS = 15
 SESSION_DAYS = 28
 
+# Reranker und Sprachmodell nacheinander statt gleichzeitig im Grafikspeicher
+# halten. Kostet rund 5 Sekunden erneutes Laden je Anfrage, gibt dafür etwa
+# 2,2 GB frei - auf einer 16-GB-Karte der Unterschied, ob das Sprachmodell mit
+# großem Kontextfenster noch vollständig daraufpasst.
+NACHEINANDER_LADEN = os.getenv("NACHEINANDER_LADEN", "0").strip() in ("1", "ja", "true")
+
 TEXT_FIELDS = [
     "absender_name", "absender_strasse", "absender_plz_ort",
     "kasse_name", "kasse_strasse", "kasse_plz_ort",
@@ -905,6 +911,14 @@ def generate_answer(
                 get_expert_index(), get_user_index(), eigenstaendig,
                 reranker=reranker, extra_queries=zusatzfragen,
             )
+
+        # Den Grafikspeicher des Neubewertungsmodells freigeben, bevor das
+        # Sprachmodell schreibt. Beide arbeiten nacheinander, lagen bisher aber
+        # gleichzeitig im Speicher - und der ist auf dieser Karte der Engpass.
+        # Der Zwischenspeicher für ein großes Kontextfenster braucht den Platz.
+        if NACHEINANDER_LADEN:
+            pflege_rag.gib_reranker_frei(reranker)
+            get_reranker.clear()
 
         # Themenfremde Fragen gar nicht erst an das Sprachmodell geben. Es
         # antwortet sonst mit dem, was zufällig im Kontext steht - bei der
