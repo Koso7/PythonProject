@@ -51,7 +51,7 @@ UNTERLAGEN = Path(
 MODELLE = [
     ("mistral-nemo-instruct-2407", "Mistral NeMo 12B"),
     ("gemma-4-12b-it", "Gemma 4 12B"),
-    ("qwen3-14b", "Qwen 3 14B"),
+    ("qwen3.5-9b", "Qwen3.5 9B"),
     ("llama-3.1-8b-instruct", "Llama 3.1 8B"),
 ]
 KONTEXTGROESSEN = [15000, 25000, 40000, 50000]
