@@ -48,11 +48,20 @@ UNTERLAGEN = Path(
     r"\IT-Studienprojekt\beispielfall"
 )
 
+# Vier Modelle in einer Gewichtsklasse (6 bis 9 GB in Q4_K_M), damit sie den
+# Rechner ähnlich fordern und der Vergleich das Modell misst, nicht die Größe.
+# Alle vier tragen mindestens 128.000 Token Kontext, decken also jede Spalte ab.
 MODELLE = [
+    # Grundlinie: das derzeit eingesetzte Modell, Juli 2024
     ("mistral-nemo-instruct-2407", "Mistral NeMo 12B"),
+    # Dieselbe Werkstatt, anderthalb Jahre später (Dezember 2025). Der
+    # aussagekräftigste Vergleich - schlägt er die Grundlinie, ist der Umstieg
+    # unmittelbar umsetzbar.
+    ("ministral-3-14b-instruct-2512", "Ministral 3 14B"),
+    # Juni 2026, gleiche Größenklasse, 256.000 Token Kontext
     ("gemma-4-12b-it", "Gemma 4 12B"),
+    # Frühjahr 2026, etwas leichter - beantwortet zugleich, ob 12B nötig sind
     ("qwen3.5-9b", "Qwen3.5 9B"),
-    ("llama-3.1-8b-instruct", "Llama 3.1 8B"),
 ]
 KONTEXTGROESSEN = [15000, 25000, 40000, 50000]
 
